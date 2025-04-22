@@ -11,6 +11,20 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { diffLines, createTwoFilesPatch } from 'diff';
 import { minimatch } from 'minimatch';
 
+// Настройки логирования
+const DEBUG_LEVEL = process.env.DEBUG_LEVEL || 'info'; // 'debug', 'info', 'warn', 'error'
+
+// Функция логирования
+function log(level: string, message: string): void {
+  const levels: {[key: string]: number} = { debug: 0, info: 1, warn: 2, error: 3 };
+  if ((levels[level] ?? 3) >= (levels[DEBUG_LEVEL] ?? 1)) {
+    if (level === 'debug') console.debug(message);
+    else if (level === 'info') console.info(message);
+    else if (level === 'warn') console.warn(message);
+    else console.error(message);
+  }
+}
+
 /**
  * «Умный» append: дописывает только ту часть content,
  * которой ещё нет в конце файла по пути filePath.
@@ -30,6 +44,7 @@ async function smartAppend(filePath: string, content: string, initialChunkSize =
   } catch {
     // Файл ещё не существует — запишем всё
     await fs.writeFile(filePath, content, "utf8");
+    log('debug', `Файл ${filePath} не существует, создаем новый`);
     return;
   }
 
@@ -50,7 +65,7 @@ async function smartAppend(filePath: string, content: string, initialChunkSize =
       return;
     } catch (err) {
       // Если не удалось прочитать весь файл, продолжаем с чтением по частям
-      console.error(`Не удалось прочитать весь файл, переключаюсь на чтение по частям: ${err}`);
+      log('warn', `Не удалось прочитать весь файл, переключаюсь на чтение по частям: ${err}`);
     }
   }
 
@@ -80,7 +95,7 @@ async function smartAppend(filePath: string, content: string, initialChunkSize =
         // Если перекрытие не найдено, увеличиваем размер чанка
         chunkSize *= 2;
         iterations++;
-        console.log(`Перекрытие не найдено, увеличиваю размер буфера до ${chunkSize} байт (итерация ${iterations})`);
+        log('debug', `Перекрытие не найдено, увеличиваю размер буфера до ${chunkSize} байт (итерация ${iterations})`);
       }
     }
 
@@ -90,7 +105,7 @@ async function smartAppend(filePath: string, content: string, initialChunkSize =
       await fs.appendFile(filePath, toWrite, "utf8");
     }
   } catch (error) {
-    console.error(`Ошибка при выполнении smartAppend: ${error}`);
+    log('error', `Ошибка при выполнении smartAppend: ${error}`);
     throw error; // Пробрасываем ошибку дальше для обработки на верхнем уровне
   }
 }
@@ -306,6 +321,7 @@ const SmartAppendFileArgsSchema = z.object({
   path: z.string(),
   content: z.string(),
   chunkSize: z.number().optional().default(1024),
+  logLevel: z.enum(['debug', 'info', 'warn', 'error']).optional(),
 });
 
 const EditOperation = z.object({
@@ -693,6 +709,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         const results = await Promise.all(
           parsed.data.paths.map(async (filePath: string) => {
             try {
+          // Временно изменяем уровень логирования, если пользователь его указал
+          const prevDebugLevel = DEBUG_LEVEL;
+          if (parsed.data.logLevel) {
+            (global as any).DEBUG_LEVEL = parsed.data.logLevel;
+          }
               const validPath = await validatePath(filePath);
               const content = await fs.readFile(validPath, "utf-8");
               return `${filePath}:\n${content}\n`;
@@ -752,12 +773,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         const validPath = await validatePath(parsed.data.path);
         
         try {
-          await smartAppend(validPath, parsed.data.content, parsed.data.chunkSize);
-          return {
-            content: [{ type: "text", text: `Successfully smart-appended to ${parsed.data.path}` }],
-          };
+          // Временно изменяем уровень логирования, если пользователь его указал
+          const prevDebugLevel = DEBUG_LEVEL;
+          if (parsed.data.logLevel) {
+            (global as any).DEBUG_LEVEL = parsed.data.logLevel;
+          }
+          
+          try {
+            await smartAppend(validPath, parsed.data.content, parsed.data.chunkSize);
+            log('info', `Успешно выполнен smart-append к файлу ${parsed.data.path}`);
+            return {
+              content: [{ type: "text", text: `Successfully smart-appended to ${parsed.data.path}` }],
+            };
+          } finally {
+            // Восстанавливаем оригинальный уровень логирования
+            if (parsed.data.logLevel) {
+              (global as any).DEBUG_LEVEL = prevDebugLevel;
+            }
+          }
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
+          log('error', `Ошибка при выполнении smart-append: ${errorMessage}`);
           throw new Error(`Failed to smart-append to file: ${errorMessage}`);
         }
       }
@@ -946,5 +982,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 const transport = new StdioServerTransport();
 server.connect(transport);
 
-console.error(`Secure filesystem server started. Allowed directories: ${allowedDirectories.join(', ')}`);
+log('info', `Secure filesystem server started. Allowed directories: ${allowedDirectories.join(', ')}`);
+log('info', `Logging level: ${DEBUG_LEVEL}`);
 
