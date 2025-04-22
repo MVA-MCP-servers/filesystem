@@ -36,18 +36,31 @@ const allowedDirectories = args.map(dir =>
 );
 
 // Validate that all directories exist and are accessible
-await Promise.all(args.map(async (dir) => {
+let hasErrors = false;
+let exitCode = 0;
+
+// Process each directory sequentially
+for (const dir of args) {
   try {
     const stats = await fs.stat(expandHome(dir));
     if (!stats.isDirectory()) {
-      console.error(`Error: ${dir} is not a directory`);
-      process.exit(1);
+      console.error(`Error: ${dir} exists but is not a directory`);
+      hasErrors = true;
+      // Код 2 для путей, которые существуют, но не являются директориями
+      exitCode = exitCode || 2;
     }
   } catch (error) {
-    console.error(`Error accessing directory ${dir}:`, error);
-    process.exit(1);
+    console.error(`Error accessing directory ${dir}: ${error instanceof Error ? error.message : String(error)}`);
+    hasErrors = true;
+    // Код 3 для несуществующих директорий
+    exitCode = exitCode || 3;
   }
-}));
+}
+
+// Exit with appropriate error code if any directory check failed
+if (hasErrors) {
+  process.exit(exitCode);
+}
 
 // Security utilities
 async function validatePath(requestedPath: string): Promise<string> {
