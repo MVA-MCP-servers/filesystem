@@ -149,10 +149,14 @@ const CreateDirectoryArgsSchema = z.object({
 
 const ListDirectoryArgsSchema = z.object({
   path: z.string(),
+  maxDepth: z.number().optional().default(3),
+  maxItems: z.number().optional().default(1000),
 });
 
 const DirectoryTreeArgsSchema = z.object({
   path: z.string(),
+  maxDepth: z.number().optional().default(5),
+  maxItems: z.number().optional().default(5000),
 });
 
 const MoveFileArgsSchema = z.object({
@@ -356,118 +360,124 @@ async function applyFileEdits(
 
 // Tool handlers
 server.setRequestHandler(ListToolsRequestSchema, async () => {
+  const basicTools = [
+    {
+      name: "read_file",
+      description:
+        "Read the complete contents of a file from the file system. " +
+        "Handles various text encodings and provides detailed error messages " +
+        "if the file cannot be read. Use this tool when you need to examine " +
+        "the contents of a single file. Only works within allowed directories.",
+      inputSchema: zodToJsonSchema(ReadFileArgsSchema) as ToolInput,
+    },
+    {
+      name: "write_file",
+      description:
+        "Create a new file or completely overwrite an existing file with new content. " +
+        "Use with caution as it will overwrite existing files without warning. " +
+        "Handles text content with proper encoding. Only works within allowed directories.",
+      inputSchema: zodToJsonSchema(WriteFileArgsSchema) as ToolInput,
+    },
+    {
+      name: "append_file",
+      description:
+        "Append content to the end of an existing file or create a new file if it doesn't exist. " +
+        "This is safer than write_file when you want to add content without overwriting existing data. " +
+        "Handles text content with proper encoding. Only works within allowed directories.",
+      inputSchema: zodToJsonSchema(AppendFileArgsSchema) as ToolInput,
+    },
+    {
+      name: "list_directory",
+      description:
+        "Get a detailed listing of all files and directories in a specified path. " +
+        "Results clearly distinguish between files and directories with [FILE] and [DIR] " +
+        "prefixes. This tool is essential for understanding directory structure and " +
+        "finding specific files within a directory. Only works within allowed directories.",
+      inputSchema: zodToJsonSchema(ListDirectoryArgsSchema) as ToolInput,
+    },
+    {
+      name: "create_directory",
+      description:
+        "Create a new directory or ensure a directory exists. Can create multiple " +
+        "nested directories in one operation. If the directory already exists, " +
+        "this operation will succeed silently. Perfect for setting up directory " +
+        "structures for projects or ensuring required paths exist. Only works within allowed directories.",
+      inputSchema: zodToJsonSchema(CreateDirectoryArgsSchema) as ToolInput,
+    },
+    {
+      name: "get_file_info",
+      description:
+        "Retrieve detailed metadata about a file or directory. Returns comprehensive " +
+        "information including size, creation time, last modified time, permissions, " +
+        "and type. This tool is perfect for understanding file characteristics " +
+        "without reading the actual content. Only works within allowed directories.",
+      inputSchema: zodToJsonSchema(GetFileInfoArgsSchema) as ToolInput,
+    },
+    {
+      name: "list_allowed_directories",
+      description:
+        "Returns the list of directories that this server is allowed to access. " +
+        "Use this to understand which directories are available before trying to access files.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+        required: [],
+      },
+    },
+  ];
+
+  const advancedTools = [
+    {
+      name: "read_multiple_files",
+      description:
+        "Read the contents of multiple files simultaneously. This is more " +
+        "efficient than reading files one by one when you need to analyze " +
+        "or compare multiple files. Each file's content is returned with its " +
+        "path as a reference. Failed reads for individual files won't stop " +
+        "the entire operation. Only works within allowed directories.",
+      inputSchema: zodToJsonSchema(ReadMultipleFilesArgsSchema) as ToolInput,
+    },
+    {
+      name: "edit_file",
+      description:
+        "Make line-based edits to a text file. Each edit replaces exact line sequences " +
+        "with new content. Returns a git-style diff showing the changes made. " +
+        "Only works within allowed directories.",
+      inputSchema: zodToJsonSchema(EditFileArgsSchema) as ToolInput,
+    },
+    {
+      name: "directory_tree",
+      description:
+          "Get a recursive tree view of files and directories as a JSON structure. " +
+          "Each entry includes 'name', 'type' (file/directory), and 'children' for directories. " +
+          "Files have no children array, while directories always have a children array (which may be empty). " +
+          "The output is formatted with 2-space indentation for readability. Only works within allowed directories.",
+      inputSchema: zodToJsonSchema(DirectoryTreeArgsSchema) as ToolInput,
+    },
+    {
+      name: "move_file",
+      description:
+        "Move or rename files and directories. Can move files between directories " +
+        "and rename them in a single operation. If the destination exists, the " +
+        "operation will fail. Works across different directories and can be used " +
+        "for simple renaming within the same directory. Both source and destination must be within allowed directories.",
+      inputSchema: zodToJsonSchema(MoveFileArgsSchema) as ToolInput,
+    },
+    {
+      name: "search_files",
+      description:
+        "Recursively search for files and directories matching a pattern. " +
+        "Searches through all subdirectories from the starting path. The search " +
+        "is case-insensitive and matches partial names. Returns full paths to all " +
+        "matching items. Great for finding files when you don't know their exact location. " +
+        "Only searches within allowed directories.",
+      inputSchema: zodToJsonSchema(SearchFilesArgsSchema) as ToolInput,
+    },
+  ];
+
+  const allTools = [...basicTools, ...advancedTools];
   return {
-    tools: [
-      {
-        name: "read_file",
-        description:
-          "Read the complete contents of a file from the file system. " +
-          "Handles various text encodings and provides detailed error messages " +
-          "if the file cannot be read. Use this tool when you need to examine " +
-          "the contents of a single file. Only works within allowed directories.",
-        inputSchema: zodToJsonSchema(ReadFileArgsSchema) as ToolInput,
-      },
-      {
-        name: "read_multiple_files",
-        description:
-          "Read the contents of multiple files simultaneously. This is more " +
-          "efficient than reading files one by one when you need to analyze " +
-          "or compare multiple files. Each file's content is returned with its " +
-          "path as a reference. Failed reads for individual files won't stop " +
-          "the entire operation. Only works within allowed directories.",
-        inputSchema: zodToJsonSchema(ReadMultipleFilesArgsSchema) as ToolInput,
-      },
-      {
-        name: "write_file",
-        description:
-          "Create a new file or completely overwrite an existing file with new content. " +
-          "Use with caution as it will overwrite existing files without warning. " +
-          "Handles text content with proper encoding. Only works within allowed directories.",
-        inputSchema: zodToJsonSchema(WriteFileArgsSchema) as ToolInput,
-      },
-      {
-        name: "append_file",
-        description:
-          "Append content to the end of an existing file or create a new file if it doesn't exist. " +
-          "This is safer than write_file when you want to add content without overwriting existing data. " +
-          "Handles text content with proper encoding. Only works within allowed directories.",
-        inputSchema: zodToJsonSchema(AppendFileArgsSchema) as ToolInput,
-      },
-      {
-        name: "edit_file",
-        description:
-          "Make line-based edits to a text file. Each edit replaces exact line sequences " +
-          "with new content. Returns a git-style diff showing the changes made. " +
-          "Only works within allowed directories.",
-        inputSchema: zodToJsonSchema(EditFileArgsSchema) as ToolInput,
-      },
-      {
-        name: "create_directory",
-        description:
-          "Create a new directory or ensure a directory exists. Can create multiple " +
-          "nested directories in one operation. If the directory already exists, " +
-          "this operation will succeed silently. Perfect for setting up directory " +
-          "structures for projects or ensuring required paths exist. Only works within allowed directories.",
-        inputSchema: zodToJsonSchema(CreateDirectoryArgsSchema) as ToolInput,
-      },
-      {
-        name: "list_directory",
-        description:
-          "Get a detailed listing of all files and directories in a specified path. " +
-          "Results clearly distinguish between files and directories with [FILE] and [DIR] " +
-          "prefixes. This tool is essential for understanding directory structure and " +
-          "finding specific files within a directory. Only works within allowed directories.",
-        inputSchema: zodToJsonSchema(ListDirectoryArgsSchema) as ToolInput,
-      },
-      {
-        name: "directory_tree",
-        description:
-            "Get a recursive tree view of files and directories as a JSON structure. " +
-            "Each entry includes 'name', 'type' (file/directory), and 'children' for directories. " +
-            "Files have no children array, while directories always have a children array (which may be empty). " +
-            "The output is formatted with 2-space indentation for readability. Only works within allowed directories.",
-        inputSchema: zodToJsonSchema(DirectoryTreeArgsSchema) as ToolInput,
-      },
-      {
-        name: "move_file",
-        description:
-          "Move or rename files and directories. Can move files between directories " +
-          "and rename them in a single operation. If the destination exists, the " +
-          "operation will fail. Works across different directories and can be used " +
-          "for simple renaming within the same directory. Both source and destination must be within allowed directories.",
-        inputSchema: zodToJsonSchema(MoveFileArgsSchema) as ToolInput,
-      },
-      {
-        name: "search_files",
-        description:
-          "Recursively search for files and directories matching a pattern. " +
-          "Searches through all subdirectories from the starting path. The search " +
-          "is case-insensitive and matches partial names. Returns full paths to all " +
-          "matching items. Great for finding files when you don't know their exact location. " +
-          "Only searches within allowed directories.",
-        inputSchema: zodToJsonSchema(SearchFilesArgsSchema) as ToolInput,
-      },
-      {
-        name: "get_file_info",
-        description:
-          "Retrieve detailed metadata about a file or directory. Returns comprehensive " +
-          "information including size, creation time, last modified time, permissions, " +
-          "and type. This tool is perfect for understanding file characteristics " +
-          "without reading the actual content. Only works within allowed directories.",
-        inputSchema: zodToJsonSchema(GetFileInfoArgsSchema) as ToolInput,
-      },
-      {
-        name: "list_allowed_directories",
-        description:
-          "Returns the list of directories that this server is allowed to access. " +
-          "Use this to understand which directories are available before trying to access files.",
-        inputSchema: {
-          type: "object",
-          properties: {},
-          required: [],
-        },
-      },
-    ],
+    tools: allTools
   };
 });
 
@@ -578,10 +588,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
           throw new Error(`Invalid arguments for list_directory: ${parsed.error}`);
         }
         const validPath = await validatePath(parsed.data.path);
-        const entries = await fs.readdir(validPath, { withFileTypes: true });
-        const formatted = entries
-          .map((entry) => `${entry.isDirectory() ? "[DIR]" : "[FILE]"} ${entry.name}`)
-          .join("\n");
+        
+        // Implement maxDepth and maxItems limits
+        async function listWithLimits(dirPath: string, currentDepth = 0, itemCount = 0): Promise<{entries: string[], count: number}> {
+          if (currentDepth > parsed.data.maxDepth || itemCount >= parsed.data.maxItems) {
+            return { entries: [], count: itemCount };
+          }
+          
+          const entries = await fs.readdir(dirPath, { withFileTypes: true });
+          let result: string[] = [];
+          let newCount = itemCount;
+          
+          for (const entry of entries) {
+            if (newCount >= parsed.data.maxItems) break;
+            
+            result.push(`${"  ".repeat(currentDepth)}${entry.isDirectory() ? "[DIR]" : "[FILE]"} ${entry.name}`);
+            newCount++;
+          }
+          
+          return { entries: result, count: newCount };
+        }
+        
+        const { entries } = await listWithLimits(validPath);
+        const formatted = entries.join("\n");
+        
         return {
           content: [{ type: "text", text: formatted }],
         };
@@ -599,20 +629,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                 children?: TreeEntry[];
             }
 
-            async function buildTree(currentPath: string): Promise<TreeEntry[]> {
+            // Tracking total items for the maxItems limit
+            let totalItems = 0;
+
+            async function buildTree(currentPath: string, currentDepth = 0): Promise<TreeEntry[]> {
+                // Check if we've reached depth or item limits
+                if (currentDepth >= parsed.data.maxDepth || totalItems >= parsed.data.maxItems) {
+                    return [];
+                }
+                
                 const validPath = await validatePath(currentPath);
                 const entries = await fs.readdir(validPath, {withFileTypes: true});
                 const result: TreeEntry[] = [];
 
                 for (const entry of entries) {
+                    // Check item limit
+                    if (totalItems >= parsed.data.maxItems) {
+                        break;
+                    }
+                    
                     const entryData: TreeEntry = {
                         name: entry.name,
                         type: entry.isDirectory() ? 'directory' : 'file'
                     };
+                    
+                    totalItems++;
 
                     if (entry.isDirectory()) {
                         const subPath = path.join(currentPath, entry.name);
-                        entryData.children = await buildTree(subPath);
+                        entryData.children = await buildTree(subPath, currentDepth + 1);
                     }
 
                     result.push(entryData);
@@ -621,7 +666,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                 return result;
             }
 
-            const treeData = await buildTree(parsed.data.path);
+            const treeData = await buildTree(parsed.data.path, 0);
             return {
                 content: [{
                     type: "text",
