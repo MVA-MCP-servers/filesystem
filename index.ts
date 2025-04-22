@@ -61,6 +61,15 @@ if (errors.length > 0) {
 }
 
 // Security utilities
+// Кэш реальных путей для ускорения fs.realpath
+const realPathCache = new Map<string,string>();
+async function getRealPath(p: string) {
+  if (!realPathCache.has(p)) {
+    realPathCache.set(p, await fs.realpath(p));
+  }
+  return realPathCache.get(p)!;
+}
+
 async function validatePath(requestedPath: string): Promise<string> {
   const expandedPath = expandHome(requestedPath);
   const absolute = path.isAbsolute(expandedPath)
@@ -70,14 +79,17 @@ async function validatePath(requestedPath: string): Promise<string> {
   const normalizedRequested = normalizePath(absolute);
 
   // Check if path is within allowed directories
-  const isAllowed = allowedDirectories.some(dir => normalizedRequested.startsWith(dir));
+  const isAllowed = allowedDirectories.some(dir => {
+    const rel = path.relative(dir, normalizedRequested);
+    return !rel.startsWith('..');
+  });
   if (!isAllowed) {
     throw new Error(`Access denied - path outside allowed directories: ${absolute} not in ${allowedDirectories.join(', ')}`);
   }
 
   // Handle symlinks by checking their real path
   try {
-    const realPath = await fs.realpath(absolute);
+    const realPath = await getRealPath(absolute);
     const normalizedReal = normalizePath(realPath);
     const isRealPathAllowed = allowedDirectories.some(dir => normalizedReal.startsWith(dir));
     if (!isRealPathAllowed) {
@@ -88,7 +100,7 @@ async function validatePath(requestedPath: string): Promise<string> {
     // For new files that don't exist yet, verify parent directory
     const parentDir = path.dirname(absolute);
     try {
-      const realParentPath = await fs.realpath(parentDir);
+      const realParentPath = await getRealPath(parentDir);
       const normalizedParent = normalizePath(realParentPath);
       const isParentAllowed = allowedDirectories.some(dir => normalizedParent.startsWith(dir));
       if (!isParentAllowed) {
