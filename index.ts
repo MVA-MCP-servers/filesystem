@@ -36,29 +36,27 @@ const allowedDirectories = args.map(dir =>
 );
 
 // Validate that all directories exist and are accessible
-let hasErrors = false;
 let exitCode = 0;
+const errors: string[] = [];
 
 // Process each directory sequentially
 for (const dir of args) {
+  const fullPath = path.resolve(expandHome(dir));
   try {
-    const stats = await fs.stat(expandHome(dir));
+    const stats = await fs.stat(fullPath);
     if (!stats.isDirectory()) {
-      console.error(`Error: ${dir} exists but is not a directory`);
-      hasErrors = true;
-      // Код 2 для путей, которые существуют, но не являются директориями
-      exitCode = exitCode || 2;
+      errors.push(`Error: '${dir}' exists but is not a directory`);
+      exitCode = Math.max(exitCode, 2);
     }
-  } catch (error) {
-    console.error(`Error accessing directory ${dir}: ${error instanceof Error ? error.message : String(error)}`);
-    hasErrors = true;
-    // Код 3 для несуществующих директорий
-    exitCode = exitCode || 3;
+  } catch {
+    errors.push(`Error: directory not found: '${dir}'`);
+    exitCode = Math.max(exitCode, 3);
   }
 }
 
 // Exit with appropriate error code if any directory check failed
-if (hasErrors) {
+if (errors.length > 0) {
+  errors.forEach(msg => console.error(msg));
   process.exit(exitCode);
 }
 
