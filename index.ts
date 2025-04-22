@@ -11,6 +11,46 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { diffLines, createTwoFilesPatch } from 'diff';
 import { minimatch } from 'minimatch';
 
+/**
+ * «Умный» append: дописывает только ту часть content,
+ * которой ещё нет в конце файла по пути filePath.
+ */
+async function smartAppend(filePath: string, content: string, chunkSize = 1024): Promise<void> {
+  // 1. Читаем хвост существующего файла
+  let existing = "";
+  try {
+    const stats = await fs.stat(filePath);
+    if (stats.size > 0) {
+      const start = Math.max(0, stats.size - chunkSize);
+      const fd = await fs.open(filePath, "r");
+      const buffer = Buffer.alloc(stats.size - start);
+      await fd.read(buffer, 0, buffer.length, start);
+      await fd.close();
+      existing = buffer.toString("utf8");
+    }
+  } catch {
+    // Файл ещё не существует — запишем всё
+    await fs.writeFile(filePath, content, "utf8");
+    return;
+  }
+
+  // 2. Ищем максимальное перекрытие suffix(existing) == prefix(content)
+  const maxOverlap = Math.min(existing.length, content.length);
+  let overlap = 0;
+  for (let len = maxOverlap; len > 0; len--) {
+    if (existing.slice(-len) === content.slice(0, len)) {
+      overlap = len;
+      break;
+    }
+  }
+
+  // 3. Дозаписываем только оставшуюся часть
+  const toWrite = content.slice(overlap);
+  if (toWrite) {
+    await fs.appendFile(filePath, toWrite, "utf8");
+  }
+}
+
 // Command line argument parsing
 const args = process.argv.slice(2);
 if (args.length === 0) {
@@ -130,6 +170,12 @@ const WriteFileArgsSchema = z.object({
 const AppendFileArgsSchema = z.object({
   path: z.string(),
   content: z.string(),
+});
+
+const SmartAppendFileArgsSchema = z.object({
+  path: z.string(),
+  content: z.string(),
+  chunkSize: z.number().optional().default(1024),
 });
 
 const EditOperation = z.object({
@@ -387,6 +433,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       inputSchema: zodToJsonSchema(AppendFileArgsSchema) as ToolInput,
     },
     {
+      name: "smart_append_file",
+      description:
+        "Intelligently append content to a file without duplication, even if previous append was interrupted. " +
+        "Detects overlapping content between existing file end and new content beginning. " +
+        "Only appends the non-overlapping content to avoid duplication. " +
+        "Perfect for resilient logging and incremental data collection. " +
+        "Only works within allowed directories.",
+      inputSchema: zodToJsonSchema(SmartAppendFileArgsSchema) as ToolInput,
+    },
+    {
       name: "list_directory",
       description:
         "Get a detailed listing of all files and directories in a specified path. " +
@@ -555,6 +611,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           throw new Error(`Failed to append to file: ${errorMessage}`);
+        }
+      }
+      
+      case "smart_append_file": {
+        const parsed = SmartAppendFileArgsSchema.safeParse(args);
+        if (!parsed.success) {
+          throw new Error(`Invalid arguments for smart_append_file: ${parsed.error}`);
+        }
+        const validPath = await validatePath(parsed.data.path);
+        
+        try {
+          await smartAppend(validPath, parsed.data.content, parsed.data.chunkSize);
+          return {
+            content: [{ type: "text", text: `Successfully smart-appended to ${parsed.data.path}` }],
+          };
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          throw new Error(`Failed to smart-append to file: ${errorMessage}`);
         }
       }
 
