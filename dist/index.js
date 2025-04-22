@@ -9,6 +9,173 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { createTwoFilesPatch } from 'diff';
 import { minimatch } from 'minimatch';
+// Настройки логирования
+const DEBUG_LEVEL = process.env.DEBUG_LEVEL || 'info'; // 'debug', 'info', 'warn', 'error'
+// Функция логирования
+function log(level, message) {
+    const levels = { debug: 0, info: 1, warn: 2, error: 3 };
+    if ((levels[level] ?? 3) >= (levels[DEBUG_LEVEL] ?? 1)) {
+        if (level === 'debug')
+            console.debug(message);
+        else if (level === 'info')
+            console.info(message);
+        else if (level === 'warn')
+            console.warn(message);
+        else
+            console.error(message);
+    }
+}
+/**
+ * «Умный» append: дописывает только ту часть content,
+ * которой ещё нет в конце файла по пути filePath.
+ * Использует динамический размер буфера для надёжного поиска перекрытий.
+ */
+async function smartAppend(filePath, content, initialChunkSize = 1024) {
+    // Задаём константы для стратегии динамического изменения буфера
+    const MAX_CHUNK_SIZE = 1024 * 1024; // 1 МБ
+    const MAX_FILE_SIZE_FOR_FULL_READ = 10 * 1024 * 1024; // 10 МБ
+    const SMALL_CONTENT_THRESHOLD = initialChunkSize * 4;
+    const MAX_ITERATIONS = 6; // Максимальное количество увеличений размера чанка
+    // Проверяем, существует ли файл
+    let fileStats;
+    try {
+        fileStats = await fs.stat(filePath);
+    }
+    catch {
+        // Файл ещё не существует — запишем всё
+        await fs.writeFile(filePath, content, "utf8");
+        log('debug', `Файл ${filePath} не существует, создаем новый`);
+        return;
+    }
+    // Измеряем фактический размер контента в байтах для корректного сравнения
+    const contentBytes = Buffer.byteLength(content, "utf8");
+    // Стратегия для коротких вставок или небольших файлов: читаем весь файл
+    if (contentBytes <= SMALL_CONTENT_THRESHOLD || fileStats.size <= MAX_FILE_SIZE_FOR_FULL_READ) {
+        try {
+            const existing = await fs.readFile(filePath, "utf8");
+            const overlap = findMaxOverlapSimple(existing, content);
+            // Дозаписываем только оставшуюся часть
+            const toWrite = content.slice(overlap);
+            if (toWrite) {
+                await fs.appendFile(filePath, toWrite, "utf8");
+            }
+            return;
+        }
+        catch (err) {
+            // Если не удалось прочитать весь файл, продолжаем с чтением по частям
+            log('warn', `Не удалось прочитать весь файл, переключаюсь на чтение по частям: ${err}`);
+        }
+    }
+    // Для больших файлов используем динамическое изменение размера буфера
+    let chunkSize = initialChunkSize;
+    let overlap = 0;
+    let iterations = 0;
+    try {
+        while (chunkSize <= MAX_CHUNK_SIZE && overlap === 0 && iterations < MAX_ITERATIONS) {
+            // Читаем хвост существующего файла
+            const start = Math.max(0, fileStats.size - chunkSize);
+            const fd = await fs.open(filePath, "r");
+            const buffer = Buffer.alloc(Math.min(fileStats.size, chunkSize));
+            await fd.read(buffer, 0, buffer.length, start);
+            await fd.close();
+            const existing = buffer.toString("utf8");
+            // Выбираем алгоритм поиска перекрытия в зависимости от размера чанка
+            if (chunkSize > SMALL_CONTENT_THRESHOLD) {
+                overlap = findMaxOverlapRabinKarp(existing, content);
+            }
+            else {
+                overlap = findMaxOverlapSimple(existing, content);
+            }
+            if (overlap === 0 && chunkSize < MAX_CHUNK_SIZE) {
+                // Если перекрытие не найдено, увеличиваем размер чанка
+                chunkSize *= 2;
+                iterations++;
+                log('debug', `Перекрытие не найдено, увеличиваю размер буфера до ${chunkSize} байт (итерация ${iterations})`);
+            }
+        }
+        // Дозаписываем только оставшуюся часть
+        const toWrite = content.slice(overlap);
+        if (toWrite) {
+            await fs.appendFile(filePath, toWrite, "utf8");
+        }
+    }
+    catch (error) {
+        log('error', `Ошибка при выполнении smartAppend: ${error}`);
+        throw error; // Пробрасываем ошибку дальше для обработки на верхнем уровне
+    }
+}
+/**
+ * Простой алгоритм поиска максимального перекрытия.
+ * Подходит для небольших строк.
+ */
+function findMaxOverlapSimple(str1, str2) {
+    const maxPossibleOverlap = Math.min(str1.length, str2.length);
+    // Ищем с самого большого перекрытия
+    for (let len = maxPossibleOverlap; len > 0; len--) {
+        if (str1.slice(-len) === str2.slice(0, len)) {
+            return len;
+        }
+    }
+    return 0;
+}
+/**
+ * Алгоритм Рабина-Карпа для эффективного поиска перекрытий.
+ * Использует хеширование для быстрого сравнения подстрок.
+ * Оптимизированная версия с предварительным вычислением хешей.
+ */
+function findMaxOverlapRabinKarp(str1, str2) {
+    const maxPossibleOverlap = Math.min(str1.length, str2.length);
+    if (maxPossibleOverlap === 0)
+        return 0;
+    // Минимальная длина осмысленного перекрытия
+    const MIN_OVERLAP = 4;
+    if (maxPossibleOverlap < MIN_OVERLAP) {
+        // Для очень коротких строк используем простой алгоритм
+        return findMaxOverlapSimple(str1, str2);
+    }
+    // Параметры хеширования
+    const BASE = 256; // ASCII/UTF-8 основание
+    const MOD = 1000000007; // Большое простое число для модуля
+    // Предварительно вычисляем степени BASE для быстрых расчетов
+    const powers = [1];
+    for (let i = 1; i < maxPossibleOverlap; i++) {
+        powers[i] = (powers[i - 1] * BASE) % MOD;
+    }
+    // Вычисляем хеши префиксов str2
+    const prefixHashes = [0];
+    for (let i = 0; i < maxPossibleOverlap; i++) {
+        const charCode = str2.charCodeAt(i);
+        prefixHashes[i + 1] = ((prefixHashes[i] * BASE) % MOD + charCode) % MOD;
+    }
+    // Вычисляем хеши суффиксов str1
+    const reversePowers = [1];
+    for (let i = 1; i < maxPossibleOverlap; i++) {
+        reversePowers[i] = (reversePowers[i - 1] * BASE) % MOD;
+    }
+    // Строим суффиксный хеш-массив в обратном порядке
+    const suffixHashes = [0];
+    for (let i = 1; i <= maxPossibleOverlap; i++) {
+        const charCode = str1.charCodeAt(str1.length - i);
+        suffixHashes[i] = (suffixHashes[i - 1] + charCode * reversePowers[i - 1]) % MOD;
+    }
+    // Ищем максимальное перекрытие, сравнивая хеши
+    let maxOverlap = 0;
+    // Проверяем разные длины перекрытия, начиная с максимальной
+    for (let len = maxPossibleOverlap; len >= MIN_OVERLAP; len--) {
+        const suffixHash = suffixHashes[len];
+        const prefixHash = prefixHashes[len];
+        if (suffixHash === prefixHash) {
+            // Проверяем, действительно ли строки совпадают (для защиты от коллизий хешей)
+            const suffix = str1.slice(str1.length - len);
+            const prefix = str2.slice(0, len);
+            if (suffix === prefix) {
+                maxOverlap = len;
+                break;
+            }
+        }
+    }
+    return maxOverlap;
+}
 // Command line argument parsing
 const args = process.argv.slice(2);
 if (args.length === 0) {
@@ -28,20 +195,37 @@ function expandHome(filepath) {
 // Store allowed directories in normalized form
 const allowedDirectories = args.map(dir => normalizePath(path.resolve(expandHome(dir))));
 // Validate that all directories exist and are accessible
-await Promise.all(args.map(async (dir) => {
+let exitCode = 0;
+const errors = [];
+// Process each directory sequentially
+for (const dir of args) {
+    const fullPath = path.resolve(expandHome(dir));
     try {
-        const stats = await fs.stat(expandHome(dir));
+        const stats = await fs.stat(fullPath);
         if (!stats.isDirectory()) {
-            console.error(`Error: ${dir} is not a directory`);
-            process.exit(1);
+            errors.push(`Error: '${dir}' exists but is not a directory`);
+            exitCode = Math.max(exitCode, 2);
         }
     }
-    catch (error) {
-        console.error(`Error accessing directory ${dir}:`, error);
-        process.exit(1);
+    catch {
+        errors.push(`Error: directory not found: '${dir}'`);
+        exitCode = Math.max(exitCode, 3);
     }
-}));
+}
+// Exit with appropriate error code if any directory check failed
+if (errors.length > 0) {
+    errors.forEach(msg => console.error(msg));
+    process.exit(exitCode);
+}
 // Security utilities
+// Кэш реальных путей для ускорения fs.realpath
+const realPathCache = new Map();
+async function getRealPath(p) {
+    if (!realPathCache.has(p)) {
+        realPathCache.set(p, await fs.realpath(p));
+    }
+    return realPathCache.get(p);
+}
 async function validatePath(requestedPath) {
     const expandedPath = expandHome(requestedPath);
     const absolute = path.isAbsolute(expandedPath)
@@ -49,13 +233,16 @@ async function validatePath(requestedPath) {
         : path.resolve(process.cwd(), expandedPath);
     const normalizedRequested = normalizePath(absolute);
     // Check if path is within allowed directories
-    const isAllowed = allowedDirectories.some(dir => normalizedRequested.startsWith(dir));
+    const isAllowed = allowedDirectories.some(dir => {
+        const rel = path.relative(dir, normalizedRequested);
+        return !rel.startsWith('..');
+    });
     if (!isAllowed) {
         throw new Error(`Access denied - path outside allowed directories: ${absolute} not in ${allowedDirectories.join(', ')}`);
     }
     // Handle symlinks by checking their real path
     try {
-        const realPath = await fs.realpath(absolute);
+        const realPath = await getRealPath(absolute);
         const normalizedReal = normalizePath(realPath);
         const isRealPathAllowed = allowedDirectories.some(dir => normalizedReal.startsWith(dir));
         if (!isRealPathAllowed) {
@@ -67,7 +254,7 @@ async function validatePath(requestedPath) {
         // For new files that don't exist yet, verify parent directory
         const parentDir = path.dirname(absolute);
         try {
-            const realParentPath = await fs.realpath(parentDir);
+            const realParentPath = await getRealPath(parentDir);
             const normalizedParent = normalizePath(realParentPath);
             const isParentAllowed = allowedDirectories.some(dir => normalizedParent.startsWith(dir));
             if (!isParentAllowed) {
@@ -95,6 +282,12 @@ const AppendFileArgsSchema = z.object({
     path: z.string(),
     content: z.string(),
 });
+const SmartAppendFileArgsSchema = z.object({
+    path: z.string(),
+    content: z.string(),
+    chunkSize: z.number().optional().default(1024),
+    logLevel: z.enum(['debug', 'info', 'warn', 'error']).optional(),
+});
 const EditOperation = z.object({
     oldText: z.string().describe('Text to search for - must match exactly'),
     newText: z.string().describe('Text to replace with')
@@ -109,9 +302,13 @@ const CreateDirectoryArgsSchema = z.object({
 });
 const ListDirectoryArgsSchema = z.object({
     path: z.string(),
+    maxDepth: z.number().optional().default(3),
+    maxItems: z.number().optional().default(1000),
 });
 const DirectoryTreeArgsSchema = z.object({
     path: z.string(),
+    maxDepth: z.number().optional().default(5),
+    maxItems: z.number().optional().default(5000),
 });
 const MoveFileArgsSchema = z.object({
     source: z.string(),
@@ -256,106 +453,119 @@ async function applyFileEdits(filePath, edits, dryRun = false) {
 }
 // Tool handlers
 server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const basicTools = [
+        {
+            name: "read_file",
+            description: "Read the complete contents of a file from the file system. " +
+                "Handles various text encodings and provides detailed error messages " +
+                "if the file cannot be read. Use this tool when you need to examine " +
+                "the contents of a single file. Only works within allowed directories.",
+            inputSchema: zodToJsonSchema(ReadFileArgsSchema),
+        },
+        {
+            name: "write_file",
+            description: "Create a new file or completely overwrite an existing file with new content. " +
+                "Use with caution as it will overwrite existing files without warning. " +
+                "Handles text content with proper encoding. Only works within allowed directories.",
+            inputSchema: zodToJsonSchema(WriteFileArgsSchema),
+        },
+        {
+            name: "append_file",
+            description: "Append content to the end of an existing file or create a new file if it doesn't exist. " +
+                "This is safer than write_file when you want to add content without overwriting existing data. " +
+                "Handles text content with proper encoding. Only works within allowed directories.",
+            inputSchema: zodToJsonSchema(AppendFileArgsSchema),
+        },
+        {
+            name: "smart_append_file",
+            description: "Intelligently append content to a file without duplication, even if previous append was interrupted. " +
+                "Detects overlapping content between existing file end and new content beginning. " +
+                "Only appends the non-overlapping content to avoid duplication. " +
+                "Perfect for resilient logging and incremental data collection. " +
+                "Only works within allowed directories.",
+            inputSchema: zodToJsonSchema(SmartAppendFileArgsSchema),
+        },
+        {
+            name: "list_directory",
+            description: "Get a detailed listing of all files and directories in a specified path. " +
+                "Results clearly distinguish between files and directories with [FILE] and [DIR] " +
+                "prefixes. This tool is essential for understanding directory structure and " +
+                "finding specific files within a directory. Only works within allowed directories.",
+            inputSchema: zodToJsonSchema(ListDirectoryArgsSchema),
+        },
+        {
+            name: "create_directory",
+            description: "Create a new directory or ensure a directory exists. Can create multiple " +
+                "nested directories in one operation. If the directory already exists, " +
+                "this operation will succeed silently. Perfect for setting up directory " +
+                "structures for projects or ensuring required paths exist. Only works within allowed directories.",
+            inputSchema: zodToJsonSchema(CreateDirectoryArgsSchema),
+        },
+        {
+            name: "get_file_info",
+            description: "Retrieve detailed metadata about a file or directory. Returns comprehensive " +
+                "information including size, creation time, last modified time, permissions, " +
+                "and type. This tool is perfect for understanding file characteristics " +
+                "without reading the actual content. Only works within allowed directories.",
+            inputSchema: zodToJsonSchema(GetFileInfoArgsSchema),
+        },
+        {
+            name: "list_allowed_directories",
+            description: "Returns the list of directories that this server is allowed to access. " +
+                "Use this to understand which directories are available before trying to access files.",
+            inputSchema: {
+                type: "object",
+                properties: {},
+                required: [],
+            },
+        },
+    ];
+    const advancedTools = [
+        {
+            name: "read_multiple_files",
+            description: "Read the contents of multiple files simultaneously. This is more " +
+                "efficient than reading files one by one when you need to analyze " +
+                "or compare multiple files. Each file's content is returned with its " +
+                "path as a reference. Failed reads for individual files won't stop " +
+                "the entire operation. Only works within allowed directories.",
+            inputSchema: zodToJsonSchema(ReadMultipleFilesArgsSchema),
+        },
+        {
+            name: "edit_file",
+            description: "Make line-based edits to a text file. Each edit replaces exact line sequences " +
+                "with new content. Returns a git-style diff showing the changes made. " +
+                "Only works within allowed directories.",
+            inputSchema: zodToJsonSchema(EditFileArgsSchema),
+        },
+        {
+            name: "directory_tree",
+            description: "Get a recursive tree view of files and directories as a JSON structure. " +
+                "Each entry includes 'name', 'type' (file/directory), and 'children' for directories. " +
+                "Files have no children array, while directories always have a children array (which may be empty). " +
+                "The output is formatted with 2-space indentation for readability. Only works within allowed directories.",
+            inputSchema: zodToJsonSchema(DirectoryTreeArgsSchema),
+        },
+        {
+            name: "move_file",
+            description: "Move or rename files and directories. Can move files between directories " +
+                "and rename them in a single operation. If the destination exists, the " +
+                "operation will fail. Works across different directories and can be used " +
+                "for simple renaming within the same directory. Both source and destination must be within allowed directories.",
+            inputSchema: zodToJsonSchema(MoveFileArgsSchema),
+        },
+        {
+            name: "search_files",
+            description: "Recursively search for files and directories matching a pattern. " +
+                "Searches through all subdirectories from the starting path. The search " +
+                "is case-insensitive and matches partial names. Returns full paths to all " +
+                "matching items. Great for finding files when you don't know their exact location. " +
+                "Only searches within allowed directories.",
+            inputSchema: zodToJsonSchema(SearchFilesArgsSchema),
+        },
+    ];
+    const allTools = [...basicTools, ...advancedTools];
     return {
-        tools: [
-            {
-                name: "read_file",
-                description: "Read the complete contents of a file from the file system. " +
-                    "Handles various text encodings and provides detailed error messages " +
-                    "if the file cannot be read. Use this tool when you need to examine " +
-                    "the contents of a single file. Only works within allowed directories.",
-                inputSchema: zodToJsonSchema(ReadFileArgsSchema),
-            },
-            {
-                name: "read_multiple_files",
-                description: "Read the contents of multiple files simultaneously. This is more " +
-                    "efficient than reading files one by one when you need to analyze " +
-                    "or compare multiple files. Each file's content is returned with its " +
-                    "path as a reference. Failed reads for individual files won't stop " +
-                    "the entire operation. Only works within allowed directories.",
-                inputSchema: zodToJsonSchema(ReadMultipleFilesArgsSchema),
-            },
-            {
-                name: "write_file",
-                description: "Create a new file or completely overwrite an existing file with new content. " +
-                    "Use with caution as it will overwrite existing files without warning. " +
-                    "Handles text content with proper encoding. Only works within allowed directories.",
-                inputSchema: zodToJsonSchema(WriteFileArgsSchema),
-            },
-            {
-                name: "append_file",
-                description: "Append content to the end of an existing file or create a new file if it doesn't exist. " +
-                    "This is safer than write_file when you want to add content without overwriting existing data. " +
-                    "Handles text content with proper encoding. Only works within allowed directories.",
-                inputSchema: zodToJsonSchema(AppendFileArgsSchema),
-            },
-            {
-                name: "edit_file",
-                description: "Make line-based edits to a text file. Each edit replaces exact line sequences " +
-                    "with new content. Returns a git-style diff showing the changes made. " +
-                    "Only works within allowed directories.",
-                inputSchema: zodToJsonSchema(EditFileArgsSchema),
-            },
-            {
-                name: "create_directory",
-                description: "Create a new directory or ensure a directory exists. Can create multiple " +
-                    "nested directories in one operation. If the directory already exists, " +
-                    "this operation will succeed silently. Perfect for setting up directory " +
-                    "structures for projects or ensuring required paths exist. Only works within allowed directories.",
-                inputSchema: zodToJsonSchema(CreateDirectoryArgsSchema),
-            },
-            {
-                name: "list_directory",
-                description: "Get a detailed listing of all files and directories in a specified path. " +
-                    "Results clearly distinguish between files and directories with [FILE] and [DIR] " +
-                    "prefixes. This tool is essential for understanding directory structure and " +
-                    "finding specific files within a directory. Only works within allowed directories.",
-                inputSchema: zodToJsonSchema(ListDirectoryArgsSchema),
-            },
-            {
-                name: "directory_tree",
-                description: "Get a recursive tree view of files and directories as a JSON structure. " +
-                    "Each entry includes 'name', 'type' (file/directory), and 'children' for directories. " +
-                    "Files have no children array, while directories always have a children array (which may be empty). " +
-                    "The output is formatted with 2-space indentation for readability. Only works within allowed directories.",
-                inputSchema: zodToJsonSchema(DirectoryTreeArgsSchema),
-            },
-            {
-                name: "move_file",
-                description: "Move or rename files and directories. Can move files between directories " +
-                    "and rename them in a single operation. If the destination exists, the " +
-                    "operation will fail. Works across different directories and can be used " +
-                    "for simple renaming within the same directory. Both source and destination must be within allowed directories.",
-                inputSchema: zodToJsonSchema(MoveFileArgsSchema),
-            },
-            {
-                name: "search_files",
-                description: "Recursively search for files and directories matching a pattern. " +
-                    "Searches through all subdirectories from the starting path. The search " +
-                    "is case-insensitive and matches partial names. Returns full paths to all " +
-                    "matching items. Great for finding files when you don't know their exact location. " +
-                    "Only searches within allowed directories.",
-                inputSchema: zodToJsonSchema(SearchFilesArgsSchema),
-            },
-            {
-                name: "get_file_info",
-                description: "Retrieve detailed metadata about a file or directory. Returns comprehensive " +
-                    "information including size, creation time, last modified time, permissions, " +
-                    "and type. This tool is perfect for understanding file characteristics " +
-                    "without reading the actual content. Only works within allowed directories.",
-                inputSchema: zodToJsonSchema(GetFileInfoArgsSchema),
-            },
-            {
-                name: "list_allowed_directories",
-                description: "Returns the list of directories that this server is allowed to access. " +
-                    "Use this to understand which directories are available before trying to access files.",
-                inputSchema: {
-                    type: "object",
-                    properties: {},
-                    required: [],
-                },
-            },
-        ],
+        tools: allTools
     };
 });
 server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
@@ -380,6 +590,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                 }
                 const results = await Promise.all(parsed.data.paths.map(async (filePath) => {
                     try {
+                        // Временно изменяем уровень логирования, если пользователь его указал
+                        const prevDebugLevel = DEBUG_LEVEL;
+                        if (parsed.data.logLevel) {
+                            global.DEBUG_LEVEL = parsed.data.logLevel;
+                        }
                         const validPath = await validatePath(filePath);
                         const content = await fs.readFile(validPath, "utf-8");
                         return `${filePath}:\n${content}\n`;
@@ -427,6 +642,38 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                     throw new Error(`Failed to append to file: ${errorMessage}`);
                 }
             }
+            case "smart_append_file": {
+                const parsed = SmartAppendFileArgsSchema.safeParse(args);
+                if (!parsed.success) {
+                    throw new Error(`Invalid arguments for smart_append_file: ${parsed.error}`);
+                }
+                const validPath = await validatePath(parsed.data.path);
+                try {
+                    // Временно изменяем уровень логирования, если пользователь его указал
+                    const prevDebugLevel = DEBUG_LEVEL;
+                    if (parsed.data.logLevel) {
+                        global.DEBUG_LEVEL = parsed.data.logLevel;
+                    }
+                    try {
+                        await smartAppend(validPath, parsed.data.content, parsed.data.chunkSize);
+                        log('info', `Успешно выполнен smart-append к файлу ${parsed.data.path}`);
+                        return {
+                            content: [{ type: "text", text: `Successfully smart-appended to ${parsed.data.path}` }],
+                        };
+                    }
+                    finally {
+                        // Восстанавливаем оригинальный уровень логирования
+                        if (parsed.data.logLevel) {
+                            global.DEBUG_LEVEL = prevDebugLevel;
+                        }
+                    }
+                }
+                catch (error) {
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    log('error', `Ошибка при выполнении smart-append: ${errorMessage}`);
+                    throw new Error(`Failed to smart-append to file: ${errorMessage}`);
+                }
+            }
             case "edit_file": {
                 const parsed = EditFileArgsSchema.safeParse(args);
                 if (!parsed.success) {
@@ -455,10 +702,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                     throw new Error(`Invalid arguments for list_directory: ${parsed.error}`);
                 }
                 const validPath = await validatePath(parsed.data.path);
-                const entries = await fs.readdir(validPath, { withFileTypes: true });
-                const formatted = entries
-                    .map((entry) => `${entry.isDirectory() ? "[DIR]" : "[FILE]"} ${entry.name}`)
-                    .join("\n");
+                // Implement maxDepth and maxItems limits
+                async function listWithLimits(dirPath, currentDepth = 0, itemCount = 0) {
+                    const maxDepth = parsed.data?.maxDepth ?? 3;
+                    const maxItems = parsed.data?.maxItems ?? 1000;
+                    if (currentDepth > maxDepth || itemCount >= maxItems) {
+                        return { entries: [], count: itemCount };
+                    }
+                    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+                    let result = [];
+                    let newCount = itemCount;
+                    for (const entry of entries) {
+                        if (newCount >= maxItems)
+                            break;
+                        result.push(`${"  ".repeat(currentDepth)}${entry.isDirectory() ? "[DIR]" : "[FILE]"} ${entry.name}`);
+                        newCount++;
+                    }
+                    return { entries: result, count: newCount };
+                }
+                const { entries } = await listWithLimits(validPath);
+                const formatted = entries.join("\n");
                 return {
                     content: [{ type: "text", text: formatted }],
                 };
@@ -468,24 +731,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                 if (!parsed.success) {
                     throw new Error(`Invalid arguments for directory_tree: ${parsed.error}`);
                 }
-                async function buildTree(currentPath) {
+                // Tracking total items for the maxItems limit
+                let totalItems = 0;
+                async function buildTree(currentPath, currentDepth = 0) {
+                    const maxDepth = parsed.data?.maxDepth ?? 5;
+                    const maxItems = parsed.data?.maxItems ?? 5000;
+                    // Check if we've reached depth or item limits
+                    if (currentDepth >= maxDepth || totalItems >= maxItems) {
+                        return [];
+                    }
                     const validPath = await validatePath(currentPath);
                     const entries = await fs.readdir(validPath, { withFileTypes: true });
                     const result = [];
                     for (const entry of entries) {
+                        // Check item limit
+                        if (totalItems >= maxItems) {
+                            break;
+                        }
                         const entryData = {
                             name: entry.name,
                             type: entry.isDirectory() ? 'directory' : 'file'
                         };
+                        totalItems++;
                         if (entry.isDirectory()) {
                             const subPath = path.join(currentPath, entry.name);
-                            entryData.children = await buildTree(subPath);
+                            entryData.children = await buildTree(subPath, currentDepth + 1);
                         }
                         result.push(entryData);
                     }
                     return result;
                 }
-                const treeData = await buildTree(parsed.data.path);
+                const treeData = await buildTree(parsed.data.path, 0);
                 return {
                     content: [{
                             type: "text",
@@ -549,4 +825,5 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 // Initialize transport and start server
 const transport = new StdioServerTransport();
 server.connect(transport);
-console.error(`Secure filesystem server started. Allowed directories: ${allowedDirectories.join(', ')}`);
+log('info', `Secure filesystem server started. Allowed directories: ${allowedDirectories.join(', ')}`);
+log('info', `Logging level: ${DEBUG_LEVEL}`);

@@ -16,7 +16,10 @@
   "scripts": {
     "build": "tsc && shx chmod +x dist/*.js",
     "prepare": "npm run build",
-    "watch": "tsc --watch"
+    "watch": "tsc --watch",
+    "test": "jest --config test/jest.config.cjs --testPathPattern=test/basic-tests.test.ts",
+    "test:simple": "node test/run-minimal-test.js",
+    "test:smartappend": "node test/run-minimal-smartappend.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "0.5.0",
@@ -27,8 +30,12 @@
   },
   "devDependencies": {
     "@types/diff": "^5.0.9",
+    "@types/jest": "^29.5.12",
     "@types/minimatch": "^5.1.2",
     "@types/node": "^22",
+    "@jest/globals": "^29.7.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.2",
     "shx": "^0.3.4",
     "typescript": "^5.3.3"
   }
