@@ -665,7 +665,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         
         // Implement maxDepth and maxItems limits
         async function listWithLimits(dirPath: string, currentDepth = 0, itemCount = 0): Promise<{entries: string[], count: number}> {
-          if (currentDepth > parsed.data.maxDepth || itemCount >= parsed.data.maxItems) {
+          const maxDepth = parsed.data?.maxDepth ?? 3;
+          const maxItems = parsed.data?.maxItems ?? 1000;
+          
+          if (currentDepth > maxDepth || itemCount >= maxItems) {
             return { entries: [], count: itemCount };
           }
           
@@ -674,7 +677,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
           let newCount = itemCount;
           
           for (const entry of entries) {
-            if (newCount >= parsed.data.maxItems) break;
+            if (newCount >= maxItems) break;
             
             result.push(`${"  ".repeat(currentDepth)}${entry.isDirectory() ? "[DIR]" : "[FILE]"} ${entry.name}`);
             newCount++;
@@ -707,8 +710,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
             let totalItems = 0;
 
             async function buildTree(currentPath: string, currentDepth = 0): Promise<TreeEntry[]> {
+                const maxDepth = parsed.data?.maxDepth ?? 5;
+                const maxItems = parsed.data?.maxItems ?? 5000;
+                
                 // Check if we've reached depth or item limits
-                if (currentDepth >= parsed.data.maxDepth || totalItems >= parsed.data.maxItems) {
+                if (currentDepth >= maxDepth || totalItems >= maxItems) {
                     return [];
                 }
                 
@@ -718,7 +724,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 
                 for (const entry of entries) {
                     // Check item limit
-                    if (totalItems >= parsed.data.maxItems) {
+                    if (totalItems >= maxItems) {
                         break;
                     }
                     
