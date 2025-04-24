@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { createTwoFilesPatch } from 'diff';
 import { minimatch } from 'minimatch';
-import { createMockStats } from './mock-helpers';
+import { createMockStats } from './mock-helpers.js';
 
 // Мокаем fs/promises и другие модули
 jest.mock('fs/promises');
@@ -91,8 +91,8 @@ describe('Server API Handlers', () => {
       const result = await handler();
       
       // Проверяем результат
-      expect(result && 'tools' in result ? result.tools.length : 0).toBe(4); // Или другое количество
-      const tools = result && 'tools' in result && Array.isArray(result.tools) ? result.tools : [];
+      expect(result && typeof result === 'object' && 'tools' in result ? result.tools.length : 0).toBe(4); // Или другое количество
+      const tools = result && typeof result === 'object' && 'tools' in result && Array.isArray(result.tools) ? result.tools : [];
       expect(tools.map((t: any) => t.name)).toContain('smart_append_file');
     });
   });
@@ -519,7 +519,7 @@ describe('Server API Handlers', () => {
           throw new Error('File not found');
         });
         
-        (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockImplementation(async (filePath) => {
+        (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockImplementation(async (filePath: any) => {
           const validFilePath = typeof filePath === 'string' ? filePath : String(filePath);
           if (validFilePath === '/allowed/dir1/log.txt') {
             return 'Previous log entry data with New';

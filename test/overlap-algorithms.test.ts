@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import * as fs from 'fs/promises';
+import { Stats } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { createMockStats, createMockFileHandle } from './mock-helpers.js';
 
 // Импортируем функции для тестирования из нашего экспортного файла
 import { 
@@ -254,10 +256,9 @@ describe('Overlap Algorithms Tests', () => {
     
     it('should use efficient algorithm for small files', async () => {
       // Симулируем существующий файл небольшого размера
-      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce({
-        size: 500, // 500 байт
-        isDirectory: () => false
-      });
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce(createMockStats({
+        size: 500 // 500 байт
+      }));
       
       // Мок для fs.readFile
       (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockResolvedValueOnce('Initial content with overlap' as any);
@@ -282,10 +283,9 @@ describe('Overlap Algorithms Tests', () => {
     
     it('should use chunk reading for large files', async () => {
       // Симулируем существующий файл большого размера
-      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce({
-        size: 15 * 1024 * 1024, // 15 МБ
-        isDirectory: () => false
-      });
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce(createMockStats({
+        size: 15 * 1024 * 1024 // 15 МБ
+      }));
       
       // Создаем моки для операций с файловым дескриптором
       const openMock = fs.open as jest.Mock;
@@ -295,12 +295,13 @@ describe('Overlap Algorithms Tests', () => {
         Buffer.from(tailContent).copy(buffer as Buffer);
         return { bytesRead: tailContent.length };
       });
-      const closeMock = jest.fn().mockResolvedValue(undefined as any);
+      const fileHandleMock = createMockFileHandle(
+        readMock, 
+        jest.fn().mockImplementation(() => Promise.resolve())
+      );
       
-      openMock.mockResolvedValueOnce({
-        read: readMock,
-        close: closeMock
-      });
+      openMock.mockResolvedValueOnce(fileHandleMock);
+
       
       // Создаем шпион для функции findMaxOverlapRabinKarp
       const findMaxOverlapRabinKarpSpy = jest.spyOn(global, 'findMaxOverlapRabinKarp' as any)
@@ -325,10 +326,9 @@ describe('Overlap Algorithms Tests', () => {
     
     it('should handle empty files correctly', async () => {
       // Симулируем существующий пустой файл
-      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce({
-        size: 0, // 0 байт
-        isDirectory: () => false
-      });
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce(createMockStats({
+        size: 0 // 0 байт
+      }));
       
       // Мок для fs.readFile
       (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockResolvedValueOnce('' as any);
@@ -347,10 +347,9 @@ describe('Overlap Algorithms Tests', () => {
     
     it('should increase chunk size when no overlap found', async () => {
       // Симулируем существующий файл большого размера
-      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce({
-        size: 20 * 1024 * 1024, // 20 МБ
-        isDirectory: () => false
-      });
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce(createMockStats({
+        size: 20 * 1024 * 1024 // 20 МБ
+      }));
       
       // Создаем моки для операций с файловым дескриптором
       const openMock = fs.open as jest.Mock;
@@ -370,12 +369,13 @@ describe('Overlap Algorithms Tests', () => {
           return { bytesRead: largerChunk.length };
         });
       
-      const closeMock = jest.fn().mockResolvedValue(undefined as any);
+      const fileHandleMock = createMockFileHandle(
+        readMock, 
+        jest.fn().mockImplementation(() => Promise.resolve())
+      );
       
-      openMock.mockResolvedValueOnce({
-        read: readMock,
-        close: closeMock
-      });
+      openMock.mockResolvedValueOnce(fileHandleMock);
+
       
       // Создаем шпионы для функций поиска перекрытия
       const findMaxOverlapRabinKarpSpy = jest.spyOn(global, 'findMaxOverlapRabinKarp' as any)
@@ -417,10 +417,9 @@ describe('Overlap Algorithms Tests', () => {
     
     it('should handle case when no content needs to be appended', async () => {
       // Симулируем существующий файл
-      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce({
-        size: 100, // 100 байт
-        isDirectory: () => false
-      });
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce(createMockStats({
+        size: 100 // 100 байт
+      }));
       
       // Мок для fs.readFile
       (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockResolvedValueOnce('Complete content' as any);

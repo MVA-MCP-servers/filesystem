@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import * as fs from 'fs/promises';
+import { Stats } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { createMockStats, createMockFileHandle } from './mock-helpers.js';
 
 // Импортируем функции для тестирования из нашего экспортного файла
 import { smartAppend, findMaxOverlapSimple, findMaxOverlapRabinKarp } from './test-exports.js';
@@ -95,10 +97,9 @@ describe('Smart Append Tests', () => {
     
     it('should handle small files by reading the entire content', async () => {
       // Симулируем существующий файл небольшого размера
-      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce({
-        size: 500, // 500 байт
-        isDirectory: () => false
-      });
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce(createMockStats({
+        size: 500 // 500 байт
+      }));
       
       // Существующее содержимое файла
       const existingContent = 'Initial content with overlap';
@@ -128,23 +129,37 @@ describe('Smart Append Tests', () => {
     
     it('should use chunk reading for large files', async () => {
       // Симулируем существующий файл большого размера
-      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce({
-        size: 20 * 1024 * 1024, // 20 МБ
-        isDirectory: () => false
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce(createMockStats({
+        size: 20 * 1024 * 1024 // 20 МБ
+      }));
+      
+      // Создаем объект для чтения файла с правильной функцией закрытия
+      const readMock = jest.fn().mockImplementation((buffer, offset, length, position) => {
+        // Симулируем чтение хвоста файла
+        const tailContent = 'tail content with overlap';
+        Buffer.from(tailContent).copy(buffer as Buffer);
+        return { bytesRead: tailContent.length };
       });
       
-      // Мокаем fs.open для чтения хвоста файла
+      const closeMock = jest.fn().mockImplementation(() => Promise.resolve());
+      
       const fileHandleMock = {
-        read: jest.fn().mockImplementation((buffer, offset, length, position) => {
-          // Симулируем чтение хвоста файла
-          const tailContent = 'tail content with overlap';
-          Buffer.from(tailContent).copy(buffer as Buffer);
-          return { bytesRead: tailContent.length };
-        }),
-        close: jest.fn().mockResolvedValue(undefined as any)
+        read: readMock,
+        close: closeMock,
+        // Необходимые методы для полного интерфейса FileHandle
+        readFile: jest.fn(),
+        writeFile: jest.fn(),
+        appendFile: jest.fn(),
+        datasync: jest.fn(),
+        sync: jest.fn(),
+        truncate: jest.fn(),
+        stat: jest.fn(),
+        chown: jest.fn(),
+        chmod: jest.fn(),
+        utimes: jest.fn()
       };
       
-      (fs.open as jest.MockedFunction<typeof fs.open>).mockResolvedValueOnce(fileHandleMock as any);
+      (fs.open as jest.MockedFunction<typeof fs.open>).mockResolvedValueOnce(fileHandleMock);
       
       // Новый контент с перекрытием
       const newContent = 'overlap text to append';
@@ -155,7 +170,7 @@ describe('Smart Append Tests', () => {
       
       // Вызываем функцию с указанием размера чанка
       const chunkSize = 2048;
-      await smartAppend(path.join(tempDir, 'test-file.txt'), newContent, chunkSize);
+      await smartAppend(testFilePath, newContent, chunkSize);
       
       // Проверяем, что fs.open был вызван с правильными аргументами
       expect(fs.open).toHaveBeenCalledWith(testFilePath, 'r');
@@ -172,29 +187,42 @@ describe('Smart Append Tests', () => {
     
     it('should handle increasing chunk size for large files without overlap', async () => {
       // Симулируем существующий файл большого размера
-      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce({
-        size: 20 * 1024 * 1024, // 20 МБ
-        isDirectory: () => false
-      });
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce(createMockStats({
+        size: 20 * 1024 * 1024 // 20 МБ
+      }));
       
-      // Симулируем последовательное чтение с увеличением размера чанка
-      // и отсутствие перекрытия в первых чтениях
+      // Создаем объект для чтения файла с реализацией через промисы
+      const readMock = jest.fn()
+        // Первый вызов - маленький чанк без перекрытия
+        .mockImplementationOnce((buffer, offset, length, position) => {
+          Buffer.from('no overlap here').copy(buffer as Buffer);
+          return { bytesRead: 14 };
+        })
+        // Второй вызов - увеличенный чанк с перекрытием
+        .mockImplementationOnce((buffer, offset, length, position) => {
+          Buffer.from('larger chunk with overlap').copy(buffer as Buffer);
+          return { bytesRead: 24 };
+        });
+      
+      const closeMock = jest.fn().mockImplementation(() => Promise.resolve());
+      
       const fileHandleMock = {
-        read: jest.fn()
-          // Первый вызов - маленький чанк без перекрытия
-          .mockImplementationOnce((buffer, offset, length, position) => {
-            Buffer.from('no overlap here').copy(buffer as Buffer);
-            return { bytesRead: 14 };
-          })
-          // Второй вызов - увеличенный чанк с перекрытием
-          .mockImplementationOnce((buffer, offset, length, position) => {
-            Buffer.from('larger chunk with overlap').copy(buffer as Buffer);
-            return { bytesRead: 24 };
-          }),
-        close: jest.fn().mockResolvedValue(undefined as any)
+        read: readMock,
+        close: closeMock,
+        // Необходимые методы для полного интерфейса FileHandle
+        readFile: jest.fn(),
+        writeFile: jest.fn(),
+        appendFile: jest.fn(),
+        datasync: jest.fn(),
+        sync: jest.fn(),
+        truncate: jest.fn(),
+        stat: jest.fn(),
+        chown: jest.fn(),
+        chmod: jest.fn(),
+        utimes: jest.fn()
       };
       
-      (fs.open as jest.MockedFunction<typeof fs.open>).mockResolvedValueOnce(fileHandleMock as any);
+      (fs.open as jest.MockedFunction<typeof fs.open>).mockResolvedValueOnce(fileHandleMock);
       
       // Новый контент с перекрытием
       const newContent = 'overlap followed by new content';
@@ -222,10 +250,9 @@ describe('Smart Append Tests', () => {
     
     it('should handle the edge case when content is very small', async () => {
       // Симулируем существующий файл
-      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce({
-        size: 100,
-        isDirectory: () => false
-      });
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce(createMockStats({
+        size: 100
+      }));
       
       // Существующее содержимое файла
       const existingContent = 'This is a test.';
@@ -249,10 +276,9 @@ describe('Smart Append Tests', () => {
     
     it('should handle errors during file operations', async () => {
       // Симулируем ошибку при чтении файла
-      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce({
-        size: 100,
-        isDirectory: () => false
-      });
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce(createMockStats({
+        size: 100
+      }));
       
       // Ошибка при чтении файла
       (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockRejectedValueOnce(new Error('Read error') as any);
@@ -264,27 +290,55 @@ describe('Smart Append Tests', () => {
   
   // Тесты на производительность
   describe('Performance Tests', () => {
+    let tempDir: string;
+    let testFilePath: string;
+    
+    beforeEach(() => {
+      // Настройка окружения для каждого теста
+      tempDir = path.join(os.tmpdir(), 'test-performance-');
+      testFilePath = path.join(tempDir, 'test-file.txt');
+      
+      // Сбрасываем моки
+      jest.clearAllMocks();
+    });
+    
     it('should handle large files efficiently', async () => {
       // Этот тест проверяет, что функция smartAppend эффективно обрабатывает большие файлы
       
       // Симулируем большой файл
-      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce({
-        size: 50 * 1024 * 1024, // 50 МБ
-        isDirectory: () => false
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce(createMockStats({
+        size: 50 * 1024 * 1024 // 50 МБ
+      }));
+      
+      // Фиксируем значение length, чтобы избежать ошибки типизации
+      const fileSize = 50 * 1024 * 1024;
+      const tailContent = 'a'.repeat(1000) + 'overlap_data';
+      
+      // Создаем объект для чтения файла с реализацией через промисы
+      const readMock = jest.fn().mockImplementation((buffer, offset, length, position) => {
+        Buffer.from(tailContent).copy(buffer as Buffer);
+        return { bytesRead: tailContent.length };
       });
       
-      // Мокаем fs.open для чтения хвоста файла
+      const closeMock = jest.fn().mockImplementation(() => Promise.resolve());
+      
       const fileHandleMock = {
-        read: jest.fn().mockImplementation((buffer, offset, length, position) => {
-          // Заполняем буфер тестовыми данными
-          const tailContent = 'a'.repeat(length - 100) + 'overlap_data';
-          Buffer.from(tailContent).copy(buffer as Buffer);
-          return { bytesRead: tailContent.length };
-        }),
-        close: jest.fn().mockResolvedValue(undefined as any)
+        read: readMock,
+        close: closeMock,
+        // Необходимые методы для полного интерфейса FileHandle
+        readFile: jest.fn(),
+        writeFile: jest.fn(),
+        appendFile: jest.fn(),
+        datasync: jest.fn(),
+        sync: jest.fn(),
+        truncate: jest.fn(),
+        stat: jest.fn(),
+        chown: jest.fn(),
+        chmod: jest.fn(),
+        utimes: jest.fn()
       };
       
-      (fs.open as jest.MockedFunction<typeof fs.open>).mockResolvedValueOnce(fileHandleMock as any);
+      (fs.open as jest.MockedFunction<typeof fs.open>).mockResolvedValueOnce(fileHandleMock);
       
       // Создаем большой новый контент с перекрытием в начале
       const newContent = 'overlap_data' + 'b'.repeat(10000);
@@ -301,7 +355,6 @@ describe('Smart Append Tests', () => {
       await smartAppend(testFilePath, newContent, chunkSize);
       const endTime = Date.now();
       
-      // Время выполнения (для информации)
       const executionTime = endTime - startTime;
       console.log(`smartAppend execution time: ${executionTime}ms`);
       

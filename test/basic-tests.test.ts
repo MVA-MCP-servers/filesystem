@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import * as fs from 'fs/promises';
+import { Stats } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { createMockStats } from './mock-helpers.js';
 
 // Определим типы и функции для тестирования
 type BufferEncoding = 'utf8' | 'utf-8' | 'utf16le' | 'ucs2' | 'ucs-2' | 'base64' | 'latin1' | 'binary' | 'hex';
@@ -81,7 +83,7 @@ describe('Basic File Operations', () => {
     
     it('should write entire content to a new file', async () => {
       // Настройка моков
-      (fs.stat as jest.Mock).mockImplementation(() => {
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockImplementation(() => {
         throw new Error('File not found');
       });
       
@@ -98,10 +100,9 @@ describe('Basic File Operations', () => {
     
     it('should append only non-overlapping content', async () => {
       // Настройка моков
-      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValue({
-        size: 50,
-        isDirectory: () => false
-      });
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValue(createMockStats({
+        size: 50
+      }));
       
       const existingContent = 'This is the first part of the text.';
       const newContent = 'part of the text. This is the second part.';
@@ -122,10 +123,9 @@ describe('Basic File Operations', () => {
     
     it('should not append when content is already in file', async () => {
       // Настройка моков
-      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValue({
-        size: 50,
-        isDirectory: () => false
-      });
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValue(createMockStats({
+        size: 50
+      }));
       
       const content = 'This is the content';
       
@@ -143,10 +143,9 @@ describe('Basic File Operations', () => {
     
     it('should handle errors correctly', async () => {
       // Настройка моков
-      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValue({
-        size: 50,
-        isDirectory: () => false
-      });
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValue(createMockStats({
+        size: 50
+      }));
       
       (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockRejectedValue(new Error('Read error') as any);
       

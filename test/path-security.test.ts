@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
+import { mockProcessCwd } from './mock-helpers.js';
 
 // Импортируем функции для тестирования из нашего экспортного файла
 import { validatePath } from './test-exports.js';
@@ -184,7 +185,7 @@ describe('Path Security Tests', () => {
     
     it('should handle relative paths correctly', async () => {
       // Предполагаем, что текущая директория - /current/dir
-      (process.cwd as unknown as jest.MockedFunction<typeof process.cwd>) = jest.fn().mockReturnValue('/current/dir');
+      const cwdSpy = mockProcessCwd('/current/dir');
       
       // Добавляем текущую директорию в список разрешенных
       (global.allowedDirectories as string[]).push('/current/dir');

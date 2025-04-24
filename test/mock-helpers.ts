@@ -47,7 +47,7 @@ export function createMockStats(params: {
 /**
  * Безопасно мокирует process.cwd
  */
-export function mockProcessCwd(path: string): jest.SpyInstance {
+export function mockProcessCwd(path: string): jest.Mock<string> {
   const originalCwd = process.cwd;
   const spy = jest.spyOn(process, 'cwd').mockImplementation(() => path);
   

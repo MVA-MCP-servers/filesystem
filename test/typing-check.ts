@@ -3,7 +3,7 @@ import * as fs from 'fs/promises';
 import { Stats } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { mockProcessCwd } from './mock-helpers';
+import { mockProcessCwd } from './mock-helpers.js';
 
 // Простая функция для демонстрации типизации моков
 async function readAndProcessFile(filePath: string): Promise<string> {
