@@ -11,13 +11,19 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { diffLines, createTwoFilesPatch } from 'diff';
 import { minimatch } from 'minimatch';
 
-// Настройки логирования
-const DEBUG_LEVEL = process.env.DEBUG_LEVEL || 'info'; // 'debug', 'info', 'warn', 'error'
+// Настройки логирования - используем глобальную переменную для возможности изменения
+// Расширяем global для правильного типизированного доступа
+declare global {
+  var DEBUG_LEVEL: string;
+}
+
+// Устанавливаем глобальное значение уровня логирования
+global.DEBUG_LEVEL = process.env.DEBUG_LEVEL || 'info'; // 'debug', 'info', 'warn', 'error'
 
 // Функция логирования - всегда используем stderr для предотвращения смешивания с JSON-RPC
 function log(level: string, message: string): void {
   const levels: {[key: string]: number} = { debug: 0, info: 1, warn: 2, error: 3 };
-  if ((levels[level] ?? 3) >= (levels[DEBUG_LEVEL] ?? 1)) {
+  if ((levels[level] ?? 3) >= (levels[global.DEBUG_LEVEL] ?? 1)) {
     // Всегда пишем в stderr независимо от уровня логирования
     const prefix = `[filesystem] [${level}]`;
     console.error(`${prefix} ${message}`);
@@ -709,9 +715,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
           parsed.data.paths.map(async (filePath: string) => {
             try {
           // Временно изменяем уровень логирования, если пользователь его указал
-          const prevDebugLevel = DEBUG_LEVEL;
+          const prevDebugLevel = global.DEBUG_LEVEL;
           if (parsed.data.logLevel) {
-            (global as any).DEBUG_LEVEL = parsed.data.logLevel;
+            global.DEBUG_LEVEL = parsed.data.logLevel;
           }
               const validPath = await validatePath(filePath);
               const content = await fs.readFile(validPath, "utf-8");
@@ -773,9 +779,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         
         try {
           // Временно изменяем уровень логирования, если пользователь его указал
-          const prevDebugLevel = DEBUG_LEVEL;
+          const prevDebugLevel = global.DEBUG_LEVEL;
           if (parsed.data.logLevel) {
-            (global as any).DEBUG_LEVEL = parsed.data.logLevel;
+            global.DEBUG_LEVEL = parsed.data.logLevel;
           }
           
           try {
@@ -787,7 +793,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
           } finally {
             // Восстанавливаем оригинальный уровень логирования
             if (parsed.data.logLevel) {
-              (global as any).DEBUG_LEVEL = prevDebugLevel;
+              global.DEBUG_LEVEL = prevDebugLevel;
             }
           }
         } catch (error) {
@@ -982,5 +988,5 @@ const transport = new StdioServerTransport();
 server.connect(transport);
 
 log('info', `Secure filesystem server started. Allowed directories: ${allowedDirectories.join(', ')}`);
-log('info', `Logging level: ${DEBUG_LEVEL}`);
+log('info', `Logging level: ${global.DEBUG_LEVEL}`);
 
