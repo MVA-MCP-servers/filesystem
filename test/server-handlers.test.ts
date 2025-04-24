@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import * as fs from 'fs/promises';
+import { Stats } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { createTwoFilesPatch } from 'diff';
 import { minimatch } from 'minimatch';
+import { createMockStats } from './mock-helpers';
 
 // Мокаем fs/promises и другие модули
 jest.mock('fs/promises');
@@ -81,16 +83,17 @@ describe('Server API Handlers', () => {
               inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' }, chunkSize: { type: 'number' } } },
             },
             // Другие инструменты...
-          ],
-        };
+          ]
+        }
       });
       
       // Вызываем обработчик
       const result = await handler();
       
       // Проверяем результат
-      expect(result?.tools).toHaveLength(4); // Или другое количество
-      expect(result?.tools?.map((t: any) => t.name)).toContain('smart_append_file');
+      expect(result && 'tools' in result ? result.tools.length : 0).toBe(4); // Или другое количество
+      const tools = result && 'tools' in result && Array.isArray(result.tools) ? result.tools : [];
+      expect(tools.map((t: any) => t.name)).toContain('smart_append_file');
     });
   });
   
@@ -375,10 +378,9 @@ describe('Server API Handlers', () => {
           .mockResolvedValueOnce('/allowed/dir1/log.txt');
         
         // Мок для fs.stat, чтобы симулировать существующий файл
-        (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce({
-          size: 1000, // Размер файла в байтах
-          isDirectory: () => false
-        });
+        (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce(createMockStats({
+          size: 1000 // Размер файла в байтах
+        }));
         
         // Мок для fs.readFile, чтобы симулировать существующее содержимое с перекрытием
         (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockResolvedValueOnce('existing content with overlap' as any);
@@ -404,8 +406,9 @@ describe('Server API Handlers', () => {
               
               // Находим наибольшее перекрытие
               let overlap = 0;
-              for (let i = 1; i <= Math.min(existingContent.length, content.length); i++) {
-                if (typeof existingContent === 'string' && typeof content === 'string' && existingContent.slice(-i) === content.slice(0, i)) {
+              const validContent = typeof content === 'string' ? content : String(content);
+              for (let i = 1; i <= Math.min(existingContent.length, validContent.length); i++) {
+                if (typeof existingContent === 'string' && existingContent.slice(-i) === validContent.slice(0, i)) {
                   overlap = i;
                 }
               }
@@ -468,52 +471,57 @@ describe('Server API Handlers', () => {
         
         // Мок для validatePath с реальной логикой
         jest.spyOn(global, 'validatePath' as any).mockImplementation(async (p) => {
-          if (p.startsWith('/allowed/')) return p;
+          if (typeof p === 'string' && p.startsWith('/allowed/')) return p;
           throw new Error('Access denied - path outside allowed directories');
         });
         
         // Мок для smartAppend с упрощенной логикой
         jest.spyOn(global, 'smartAppend' as any).mockImplementation(async (filePath, content, chunkSize) => {
           // Проверяем, существует ли файл
-          const fileExists = await fs.stat(filePath as any).then(() => true).catch(() => false);
+          // Проверяем существование файла, предварительно проверяя тип
+          const validFilePath = typeof filePath === 'string' ? filePath : String(filePath);
+          const fileExists = await fs.stat(validFilePath).then(() => true).catch(() => false);
           
           if (!fileExists) {
             // Создаем новый файл, если он не существует
-            await fs.writeFile(filePath as any, content, 'utf8');
+            const validContent = typeof content === 'string' ? content : String(content);
+            await fs.writeFile(validFilePath, validContent, 'utf8');
           } else {
             // Читаем существующее содержимое для поиска перекрытий
-            const existingContent = await fs.readFile(filePath as any, 'utf8');
+            const existingContent = await fs.readFile(validFilePath, 'utf8');
             let overlap = 0;
             
             // Простой алгоритм поиска перекрытия
-            for (let i = 1; i <= Math.min(existingContent.length, content.length); i++) {
-              if (existingContent.slice(-i) === content.slice(0, i)) {
+            const validContent = typeof content === 'string' ? content : String(content);
+            for (let i = 1; i <= Math.min(existingContent.length, validContent.length); i++) {
+              if (existingContent.slice(-i) === validContent.slice(0, i)) {
                 overlap = i;
               }
             }
             
             // Добавляем только новую часть
             if (overlap > 0) {
-              await fs.appendFile(filePath as any, typeof content === 'string' ? content.slice(overlap) : content, 'utf8');
+              await fs.appendFile(validFilePath, validContent.slice(overlap), 'utf8');
             } else {
-              await fs.appendFile(filePath as any, content, 'utf8');
+              await fs.appendFile(validFilePath, validContent, 'utf8');
             }
           }
         });
         
         // Мокаем fs.stat и другие методы файловой системы
         (fs.stat as jest.MockedFunction<typeof fs.stat>).mockImplementation(async (filePath) => {
-          if (filePath === '/allowed/dir1/log.txt') {
-            return {
-              size: 1000,
-              isDirectory: () => false
-            };
+          const validFilePath = typeof filePath === 'string' ? filePath : String(filePath);
+          if (validFilePath === '/allowed/dir1/log.txt') {
+            return createMockStats({
+              size: 1000
+            });
           }
           throw new Error('File not found');
         });
         
         (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockImplementation(async (filePath) => {
-          if (filePath === '/allowed/dir1/log.txt') {
+          const validFilePath = typeof filePath === 'string' ? filePath : String(filePath);
+          if (validFilePath === '/allowed/dir1/log.txt') {
             return 'Previous log entry data with New';
           }
           throw new Error('File not found');
