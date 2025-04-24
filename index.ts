@@ -311,6 +311,7 @@ const ReadFileArgsSchema = z.object({
 
 const ReadMultipleFilesArgsSchema = z.object({
   paths: z.array(z.string()),
+  logLevel: z.enum(['debug', 'info', 'warn', 'error']).optional(),
 });
 
 const WriteFileArgsSchema = z.object({
