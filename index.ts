@@ -14,14 +14,13 @@ import { minimatch } from 'minimatch';
 // Настройки логирования
 const DEBUG_LEVEL = process.env.DEBUG_LEVEL || 'info'; // 'debug', 'info', 'warn', 'error'
 
-// Функция логирования
+// Функция логирования - всегда используем stderr для предотвращения смешивания с JSON-RPC
 function log(level: string, message: string): void {
   const levels: {[key: string]: number} = { debug: 0, info: 1, warn: 2, error: 3 };
   if ((levels[level] ?? 3) >= (levels[DEBUG_LEVEL] ?? 1)) {
-    if (level === 'debug') console.debug(message);
-    else if (level === 'info') console.info(message);
-    else if (level === 'warn') console.warn(message);
-    else console.error(message);
+    // Всегда пишем в stderr независимо от уровня логирования
+    const prefix = `[filesystem] [${level}]`;
+    console.error(`${prefix} ${message}`);
   }
 }
 
