@@ -25,7 +25,8 @@ function log(level: string, message: string): void {
   const levels: {[key: string]: number} = { debug: 0, info: 1, warn: 2, error: 3 };
   if ((levels[level] ?? 3) >= (levels[global.DEBUG_LEVEL] ?? 1)) {
     // Всегда пишем в stderr независимо от уровня логирования
-    const prefix = `[filesystem] [${level}]`;
+    // Добавляем временную метку для упрощения анализа логов в долгосрочной перспективе
+    const prefix = `[${new Date().toISOString()}] [filesystem] [${level}]`;
     console.error(`${prefix} ${message}`);
   }
 }
