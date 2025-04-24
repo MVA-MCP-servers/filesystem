@@ -85,8 +85,8 @@ describe('Basic File Operations', () => {
         throw new Error('File not found');
       });
       
-      const writeFileMock = fs.writeFile as jest.Mock;
-      writeFileMock.mockResolvedValue(undefined);
+      const writeFileMock = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
+      writeFileMock.mockResolvedValue(undefined as any);
       
       // Вызов функции
       const content = 'New file content';
@@ -98,7 +98,7 @@ describe('Basic File Operations', () => {
     
     it('should append only non-overlapping content', async () => {
       // Настройка моков
-      (fs.stat as jest.Mock).mockResolvedValue({
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValue({
         size: 50,
         isDirectory: () => false
       });
@@ -107,10 +107,10 @@ describe('Basic File Operations', () => {
       const newContent = 'part of the text. This is the second part.';
       const expectedAppend = ' This is the second part.';
       
-      (fs.readFile as jest.Mock).mockResolvedValue(existingContent);
+      (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockResolvedValue(existingContent as any);
       
-      const appendFileMock = fs.appendFile as jest.Mock;
-      appendFileMock.mockResolvedValue(undefined);
+      const appendFileMock = fs.appendFile as jest.MockedFunction<typeof fs.appendFile>;
+      appendFileMock.mockResolvedValue(undefined as any);
       
       // Вызов функции
       await smartAppend(testFilePath, newContent);
@@ -122,17 +122,17 @@ describe('Basic File Operations', () => {
     
     it('should not append when content is already in file', async () => {
       // Настройка моков
-      (fs.stat as jest.Mock).mockResolvedValue({
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValue({
         size: 50,
         isDirectory: () => false
       });
       
       const content = 'This is the content';
       
-      (fs.readFile as jest.Mock).mockResolvedValue(content);
+      (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockResolvedValue(content as any);
       
-      const appendFileMock = fs.appendFile as jest.Mock;
-      appendFileMock.mockResolvedValue(undefined);
+      const appendFileMock = fs.appendFile as jest.MockedFunction<typeof fs.appendFile>;
+      appendFileMock.mockResolvedValue(undefined as any);
       
       // Вызов функции
       await smartAppend(testFilePath, content);
@@ -143,12 +143,12 @@ describe('Basic File Operations', () => {
     
     it('should handle errors correctly', async () => {
       // Настройка моков
-      (fs.stat as jest.Mock).mockResolvedValue({
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValue({
         size: 50,
         isDirectory: () => false
       });
       
-      (fs.readFile as jest.Mock).mockRejectedValue(new Error('Read error'));
+      (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockRejectedValue(new Error('Read error') as any);
       
       // Проверки - должна быть выброшена ошибка
       await expect(smartAppend(testFilePath, 'content')).rejects.toThrow('Read error');

@@ -31,7 +31,7 @@ describe('Path Security Tests', () => {
       const safePath = path.join('/allowed/dir1', 'file.txt');
       
       // Мокаем fs.realpath для возврата того же пути
-      (fs.realpath as jest.Mock).mockResolvedValueOnce(safePath);
+      (fs.realpath as jest.MockedFunction<typeof fs.realpath>).mockResolvedValueOnce(safePath as any);
       
       // Вызываем функцию и проверяем результат
       const result = await validatePath(safePath);
@@ -49,7 +49,7 @@ describe('Path Security Tests', () => {
       const windowsPath = 'C:\\allowed\\windows\\dir\\file.txt';
       
       // Мокаем fs.realpath для возврата того же пути
-      (fs.realpath as jest.Mock).mockResolvedValueOnce(windowsPath);
+      (fs.realpath as jest.MockedFunction<typeof fs.realpath>).mockResolvedValueOnce(windowsPath as any);
       
       // Вызываем функцию и проверяем результат
       const result = await validatePath(windowsPath);
@@ -61,7 +61,7 @@ describe('Path Security Tests', () => {
       const normalizedPath = '/allowed/dir1/file.txt';
       
       // Мокаем fs.realpath для возврата нормализованного пути
-      (fs.realpath as jest.Mock).mockResolvedValueOnce(normalizedPath);
+      (fs.realpath as jest.MockedFunction<typeof fs.realpath>).mockResolvedValueOnce(normalizedPath as any);
       
       // Вызываем функцию и проверяем результат
       const result = await validatePath(nonNormalizedPath);
@@ -75,7 +75,7 @@ describe('Path Security Tests', () => {
       const targetPath = '/allowed/dir2/target';
       
       // Мокаем fs.realpath для возврата реального пути
-      (fs.realpath as jest.Mock).mockResolvedValueOnce(targetPath);
+      (fs.realpath as jest.MockedFunction<typeof fs.realpath>).mockResolvedValueOnce(targetPath as any);
       
       // Вызываем функцию и проверяем результат
       const result = await validatePath(symlinkPath);
@@ -88,7 +88,7 @@ describe('Path Security Tests', () => {
       const targetPath = '/unauthorized/target';
       
       // Мокаем fs.realpath для возврата пути вне разрешенных директорий
-      (fs.realpath as jest.Mock).mockResolvedValueOnce(targetPath);
+      (fs.realpath as jest.MockedFunction<typeof fs.realpath>).mockResolvedValueOnce(targetPath as any);
       
       // Проверяем, что функция выбрасывает ошибку
       await expect(validatePath(symlinkPath)).rejects.toThrow('Access denied');
@@ -100,7 +100,7 @@ describe('Path Security Tests', () => {
       const finalPath = '/allowed/dir2/target';
       
       // Мокаем fs.realpath для имитации цепочки символических ссылок
-      (fs.realpath as jest.Mock).mockResolvedValueOnce(finalPath);
+      (fs.realpath as jest.MockedFunction<typeof fs.realpath>).mockResolvedValueOnce(finalPath as any);
       
       // Вызываем функцию и проверяем результат
       const result = await validatePath(path1);
@@ -114,10 +114,10 @@ describe('Path Security Tests', () => {
       const parentDir = '/allowed/dir1/new';
       
       // Мокаем fs.realpath для выбрасывания ошибки (файл не существует)
-      (fs.realpath as jest.Mock).mockRejectedValueOnce(new Error('File not found'));
+      (fs.realpath as jest.MockedFunction<typeof fs.realpath>).mockRejectedValueOnce(new Error('File not found') as any);
       
       // Мокаем fs.realpath для родительской директории
-      (fs.realpath as jest.Mock).mockResolvedValueOnce(parentDir);
+      (fs.realpath as jest.MockedFunction<typeof fs.realpath>).mockResolvedValueOnce(parentDir as any);
       
       // Вызываем функцию и проверяем результат
       const result = await validatePath(newFilePath);
@@ -129,10 +129,10 @@ describe('Path Security Tests', () => {
       const parentDir = '/unauthorized/new';
       
       // Мокаем fs.realpath для выбрасывания ошибки (файл не существует)
-      (fs.realpath as jest.Mock).mockRejectedValueOnce(new Error('File not found'));
+      (fs.realpath as jest.MockedFunction<typeof fs.realpath>).mockRejectedValueOnce(new Error('File not found') as any);
       
       // Мокаем fs.realpath для родительской директории
-      (fs.realpath as jest.Mock).mockResolvedValueOnce(parentDir);
+      (fs.realpath as jest.MockedFunction<typeof fs.realpath>).mockResolvedValueOnce(parentDir as any);
       
       // Проверяем, что функция выбрасывает ошибку
       await expect(validatePath(unsafeNewFilePath)).rejects.toThrow('Access denied');
@@ -142,10 +142,10 @@ describe('Path Security Tests', () => {
       const newFilePath = '/allowed/dir1/non-existent-dir/file.txt';
       
       // Мокаем fs.realpath для выбрасывания ошибки (файл не существует)
-      (fs.realpath as jest.Mock).mockRejectedValueOnce(new Error('File not found'));
+      (fs.realpath as jest.MockedFunction<typeof fs.realpath>).mockRejectedValueOnce(new Error('File not found') as any);
       
       // Мокаем fs.realpath для родительской директории, которая не существует
-      (fs.realpath as jest.Mock).mockRejectedValueOnce(new Error('Directory not found'));
+      (fs.realpath as jest.MockedFunction<typeof fs.realpath>).mockRejectedValueOnce(new Error('Directory not found') as any);
       
       // Проверяем, что функция выбрасывает ошибку
       await expect(validatePath(newFilePath)).rejects.toThrow('Parent directory does not exist');
@@ -162,7 +162,7 @@ describe('Path Security Tests', () => {
       (global.allowedDirectories as string[]).push(path.normalize(os.homedir()));
       
       // Мокаем fs.realpath для возврата расширенного пути
-      (fs.realpath as jest.Mock).mockResolvedValueOnce(expandedPath);
+      (fs.realpath as jest.MockedFunction<typeof fs.realpath>).mockResolvedValueOnce(expandedPath as any);
       
       // Вызываем функцию и проверяем результат
       const result = await validatePath(tildeBasedPath);
@@ -176,7 +176,7 @@ describe('Path Security Tests', () => {
       const normalizedPath = '/etc/passwd';
       
       // Мокаем fs.realpath для возврата нормализованного пути
-      (fs.realpath as jest.Mock).mockResolvedValueOnce(normalizedPath);
+      (fs.realpath as jest.MockedFunction<typeof fs.realpath>).mockResolvedValueOnce(normalizedPath as any);
       
       // Проверяем, что функция выбрасывает ошибку
       await expect(validatePath(traversalPath)).rejects.toThrow('Access denied');
@@ -184,7 +184,7 @@ describe('Path Security Tests', () => {
     
     it('should handle relative paths correctly', async () => {
       // Предполагаем, что текущая директория - /current/dir
-      process.cwd = jest.fn().mockReturnValue('/current/dir');
+      (process.cwd as unknown as jest.MockedFunction<typeof process.cwd>) = jest.fn().mockReturnValue('/current/dir');
       
       // Добавляем текущую директорию в список разрешенных
       (global.allowedDirectories as string[]).push('/current/dir');
@@ -193,7 +193,7 @@ describe('Path Security Tests', () => {
       const absolutePath = '/current/dir/file.txt';
       
       // Мокаем fs.realpath для возврата абсолютного пути
-      (fs.realpath as jest.Mock).mockResolvedValueOnce(absolutePath);
+      (fs.realpath as jest.MockedFunction<typeof fs.realpath>).mockResolvedValueOnce(absolutePath as any);
       
       // Вызываем функцию и проверяем результат
       const result = await validatePath(relativePath);
@@ -206,7 +206,7 @@ describe('Path Security Tests', () => {
       
       if (process.platform === 'win32') {
         // На Windows сравнение должно быть нечувствительно к регистру
-        (fs.realpath as jest.Mock).mockResolvedValueOnce(testPath);
+        (fs.realpath as jest.MockedFunction<typeof fs.realpath>).mockResolvedValueOnce(testPath as any);
         const result = await validatePath(testPath);
         expect(result).toBe(testPath);
       } else {
@@ -221,7 +221,7 @@ describe('Path Security Tests', () => {
       const safePath = '/allowed/dir1/file.txt';
       
       // Мокаем fs.realpath для возврата пути
-      (fs.realpath as jest.Mock).mockResolvedValue(safePath);
+      (fs.realpath as jest.MockedFunction<typeof fs.realpath>).mockResolvedValue(safePath as any);
       
       // Вызываем функцию дважды
       await validatePath(safePath);

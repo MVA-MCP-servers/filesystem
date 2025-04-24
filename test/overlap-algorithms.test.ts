@@ -238,11 +238,11 @@ describe('Overlap Algorithms Tests', () => {
 
     it('should write entire content for new files', async () => {
       // Симулируем, что файла не существует
-      (fs.stat as jest.Mock).mockRejectedValueOnce(new Error('File not found'));
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockRejectedValueOnce(new Error('File not found') as any);
       
       // Мок для fs.writeFile
-      const writeFileMock = fs.writeFile as jest.Mock;
-      writeFileMock.mockResolvedValueOnce(undefined);
+      const writeFileMock = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
+      writeFileMock.mockResolvedValueOnce(undefined as any);
       
       // Вызываем smartAppend
       const content = 'New file content';
@@ -254,17 +254,17 @@ describe('Overlap Algorithms Tests', () => {
     
     it('should use efficient algorithm for small files', async () => {
       // Симулируем существующий файл небольшого размера
-      (fs.stat as jest.Mock).mockResolvedValueOnce({
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce({
         size: 500, // 500 байт
         isDirectory: () => false
       });
       
       // Мок для fs.readFile
-      (fs.readFile as jest.Mock).mockResolvedValueOnce('Initial content with overlap');
+      (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockResolvedValueOnce('Initial content with overlap' as any);
       
       // Мок для fs.appendFile
-      const appendFileMock = fs.appendFile as jest.Mock;
-      appendFileMock.mockResolvedValueOnce(undefined);
+      const appendFileMock = fs.appendFile as jest.MockedFunction<typeof fs.appendFile>;
+      appendFileMock.mockResolvedValueOnce(undefined as any);
       
       // Создаем шпион для функции findMaxOverlapSimple
       const findMaxOverlapSimpleSpy = jest.spyOn(global, 'findMaxOverlapSimple' as any)
@@ -282,7 +282,7 @@ describe('Overlap Algorithms Tests', () => {
     
     it('should use chunk reading for large files', async () => {
       // Симулируем существующий файл большого размера
-      (fs.stat as jest.Mock).mockResolvedValueOnce({
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce({
         size: 15 * 1024 * 1024, // 15 МБ
         isDirectory: () => false
       });
@@ -292,10 +292,10 @@ describe('Overlap Algorithms Tests', () => {
       const readMock = jest.fn().mockImplementation((buffer, offset, length, position) => {
         // Заполняем буфер тестовыми данными
         const tailContent = 'end with overlap data';
-        Buffer.from(tailContent).copy(buffer);
+        Buffer.from(tailContent).copy(buffer as Buffer);
         return { bytesRead: tailContent.length };
       });
-      const closeMock = jest.fn().mockResolvedValue(undefined);
+      const closeMock = jest.fn().mockResolvedValue(undefined as any);
       
       openMock.mockResolvedValueOnce({
         read: readMock,
@@ -307,8 +307,8 @@ describe('Overlap Algorithms Tests', () => {
         .mockReturnValueOnce(10); // предполагаем перекрытие 'overlap data'
       
       // Мок для fs.appendFile
-      const appendFileMock = fs.appendFile as jest.Mock;
-      appendFileMock.mockResolvedValueOnce(undefined);
+      const appendFileMock = fs.appendFile as jest.MockedFunction<typeof fs.appendFile>;
+      appendFileMock.mockResolvedValueOnce(undefined as any);
       
       // Вызываем smartAppend
       await smartAppend(testFilePath, 'overlap data followed by something new');
@@ -325,17 +325,17 @@ describe('Overlap Algorithms Tests', () => {
     
     it('should handle empty files correctly', async () => {
       // Симулируем существующий пустой файл
-      (fs.stat as jest.Mock).mockResolvedValueOnce({
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce({
         size: 0, // 0 байт
         isDirectory: () => false
       });
       
       // Мок для fs.readFile
-      (fs.readFile as jest.Mock).mockResolvedValueOnce('');
+      (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockResolvedValueOnce('' as any);
       
       // Мок для fs.appendFile
-      const appendFileMock = fs.appendFile as jest.Mock;
-      appendFileMock.mockResolvedValueOnce(undefined);
+      const appendFileMock = fs.appendFile as jest.MockedFunction<typeof fs.appendFile>;
+      appendFileMock.mockResolvedValueOnce(undefined as any);
       
       // Вызываем smartAppend
       const content = 'Content for empty file';
@@ -347,7 +347,7 @@ describe('Overlap Algorithms Tests', () => {
     
     it('should increase chunk size when no overlap found', async () => {
       // Симулируем существующий файл большого размера
-      (fs.stat as jest.Mock).mockResolvedValueOnce({
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce({
         size: 20 * 1024 * 1024, // 20 МБ
         isDirectory: () => false
       });
@@ -360,17 +360,17 @@ describe('Overlap Algorithms Tests', () => {
         // Первое чтение - небольшой чанк, без перекрытия
         .mockImplementationOnce((buffer, offset, length, position) => {
           const smallChunk = 'no overlap here';
-          Buffer.from(smallChunk).copy(buffer);
+          Buffer.from(smallChunk).copy(buffer as Buffer);
           return { bytesRead: smallChunk.length };
         })
         // Второе чтение - больший чанк, с перекрытием
         .mockImplementationOnce((buffer, offset, length, position) => {
           const largerChunk = 'bigger chunk with overlap data';
-          Buffer.from(largerChunk).copy(buffer);
+          Buffer.from(largerChunk).copy(buffer as Buffer);
           return { bytesRead: largerChunk.length };
         });
       
-      const closeMock = jest.fn().mockResolvedValue(undefined);
+      const closeMock = jest.fn().mockResolvedValue(undefined as any);
       
       openMock.mockResolvedValueOnce({
         read: readMock,
@@ -385,8 +385,8 @@ describe('Overlap Algorithms Tests', () => {
         .mockReturnValueOnce(11); // "overlap data"
       
       // Мок для fs.appendFile
-      const appendFileMock = fs.appendFile as jest.Mock;
-      appendFileMock.mockResolvedValueOnce(undefined);
+      const appendFileMock = fs.appendFile as jest.MockedFunction<typeof fs.appendFile>;
+      appendFileMock.mockResolvedValueOnce(undefined as any);
       
       // Вызываем smartAppend с небольшим начальным размером чанка
       await smartAppend(testFilePath, 'overlap data and more content', 512);
@@ -406,10 +406,10 @@ describe('Overlap Algorithms Tests', () => {
     
     it('should handle errors correctly', async () => {
       // Симулируем ошибку при чтении информации о файле
-      (fs.stat as jest.Mock).mockRejectedValueOnce(new Error('Failed to get file stats'));
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockRejectedValueOnce(new Error('Failed to get file stats') as any);
       
       // Симулируем ошибку при записи в файл
-      (fs.writeFile as jest.Mock).mockRejectedValueOnce(new Error('Failed to write to file'));
+      (fs.writeFile as jest.MockedFunction<typeof fs.writeFile>).mockRejectedValueOnce(new Error('Failed to write to file') as any);
       
       // Проверяем, что ошибка пробрасывается наверх
       await expect(smartAppend(testFilePath, 'content')).rejects.toThrow('Failed to write to file');
@@ -417,17 +417,17 @@ describe('Overlap Algorithms Tests', () => {
     
     it('should handle case when no content needs to be appended', async () => {
       // Симулируем существующий файл
-      (fs.stat as jest.Mock).mockResolvedValueOnce({
+      (fs.stat as jest.MockedFunction<typeof fs.stat>).mockResolvedValueOnce({
         size: 100, // 100 байт
         isDirectory: () => false
       });
       
       // Мок для fs.readFile
-      (fs.readFile as jest.Mock).mockResolvedValueOnce('Complete content');
+      (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockResolvedValueOnce('Complete content' as any);
       
       // Мок для fs.appendFile
-      const appendFileMock = fs.appendFile as jest.Mock;
-      appendFileMock.mockResolvedValueOnce(undefined);
+      const appendFileMock = fs.appendFile as jest.MockedFunction<typeof fs.appendFile>;
+      appendFileMock.mockResolvedValueOnce(undefined as any);
       
       // Шпион для findMaxOverlapSimple
       jest.spyOn(global, 'findMaxOverlapSimple' as any)
