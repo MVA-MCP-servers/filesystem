@@ -1,6 +1,7 @@
 /**
  * Вспомогательные функции для правильного мокирования типов в тестах
  */
+import { FileHandle } from 'fs/promises';
 import { Stats } from 'fs';
 import { jest } from '@jest/globals';
 
@@ -47,7 +48,7 @@ export function createMockStats(params: {
 /**
  * Безопасно мокирует process.cwd
  */
-export function mockProcessCwd(path: string): jest.Mock<string> {
+export function mockProcessCwd(path: string): jest.SpyInstance {
   const originalCwd = process.cwd;
   const spy = jest.spyOn(process, 'cwd').mockImplementation(() => path);
   
@@ -57,7 +58,7 @@ export function mockProcessCwd(path: string): jest.Mock<string> {
 /**
  * Создает объект, имитирующий FileHandle для fs.open
  */
-export function createMockFileHandle(readImplementation: any, closeImplementation: any = () => Promise.resolve()) {
+export function createMockFileHandle(readImplementation: any, closeImplementation: any = () => Promise.resolve()): FileHandle {
   return {
     read: readImplementation,
     close: closeImplementation,
@@ -70,6 +71,12 @@ export function createMockFileHandle(readImplementation: any, closeImplementatio
     stat: jest.fn(),
     chown: jest.fn(),
     chmod: jest.fn(),
-    utimes: jest.fn()
-  };
+    utimes: jest.fn(),
+    fd: 999,  // Фиктивный дескриптор файла
+    createReadStream: jest.fn(),
+    createWriteStream: jest.fn(),
+    readableWebStream: jest.fn() as any,
+    writable: jest.fn() as any,
+    readable: jest.fn() as any,
+  } as FileHandle;
 }

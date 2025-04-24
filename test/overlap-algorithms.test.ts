@@ -300,7 +300,7 @@ describe('Overlap Algorithms Tests', () => {
         jest.fn().mockImplementation(() => Promise.resolve())
       );
       
-      openMock.mockResolvedValueOnce(fileHandleMock);
+      openMock.mockResolvedValueOnce(fileHandleMock as any);
 
       
       // Создаем шпион для функции findMaxOverlapRabinKarp
@@ -374,7 +374,7 @@ describe('Overlap Algorithms Tests', () => {
         jest.fn().mockImplementation(() => Promise.resolve())
       );
       
-      openMock.mockResolvedValueOnce(fileHandleMock);
+      openMock.mockResolvedValueOnce(fileHandleMock as any);
 
       
       // Создаем шпионы для функций поиска перекрытия

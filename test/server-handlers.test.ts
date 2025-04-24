@@ -91,8 +91,8 @@ describe('Server API Handlers', () => {
       const result = await handler();
       
       // Проверяем результат
-      expect(result && typeof result === 'object' && 'tools' in result ? result.tools.length : 0).toBe(4); // Или другое количество
-      const tools = result && typeof result === 'object' && 'tools' in result && Array.isArray(result.tools) ? result.tools : [];
+      expect(result && typeof result === 'object' && 'tools' in result ? (result.tools as any[]).length : 0).toBe(4); // Или другое количество
+      const tools = result && typeof result === 'object' && 'tools' in result && Array.isArray(result.tools) ? (result.tools as any[]) : [];
       expect(tools.map((t: any) => t.name)).toContain('smart_append_file');
     });
   });
@@ -509,7 +509,7 @@ describe('Server API Handlers', () => {
         });
         
         // Мокаем fs.stat и другие методы файловой системы
-        (fs.stat as jest.MockedFunction<typeof fs.stat>).mockImplementation(async (filePath) => {
+        (fs.stat as jest.MockedFunction<typeof fs.stat>).mockImplementation(async (filePath: any): Promise<Stats> => {
           const validFilePath = typeof filePath === 'string' ? filePath : String(filePath);
           if (validFilePath === '/allowed/dir1/log.txt') {
             return createMockStats({
@@ -519,10 +519,10 @@ describe('Server API Handlers', () => {
           throw new Error('File not found');
         });
         
-        (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockImplementation(async (filePath: any) => {
+        (fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockImplementation(async (filePath: any): Promise<Buffer> => {
           const validFilePath = typeof filePath === 'string' ? filePath : String(filePath);
           if (validFilePath === '/allowed/dir1/log.txt') {
-            return 'Previous log entry data with New';
+            return Buffer.from('Previous log entry data with New');
           }
           throw new Error('File not found');
         });

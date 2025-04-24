@@ -159,7 +159,7 @@ describe('Smart Append Tests', () => {
         utimes: jest.fn()
       };
       
-      (fs.open as jest.MockedFunction<typeof fs.open>).mockResolvedValueOnce(fileHandleMock);
+      (fs.open as jest.MockedFunction<typeof fs.open>).mockResolvedValueOnce(fileHandleMock as any);
       
       // Новый контент с перекрытием
       const newContent = 'overlap text to append';
@@ -222,7 +222,7 @@ describe('Smart Append Tests', () => {
         utimes: jest.fn()
       };
       
-      (fs.open as jest.MockedFunction<typeof fs.open>).mockResolvedValueOnce(fileHandleMock);
+      (fs.open as jest.MockedFunction<typeof fs.open>).mockResolvedValueOnce(fileHandleMock as any);
       
       // Новый контент с перекрытием
       const newContent = 'overlap followed by new content';
@@ -338,7 +338,7 @@ describe('Smart Append Tests', () => {
         utimes: jest.fn()
       };
       
-      (fs.open as jest.MockedFunction<typeof fs.open>).mockResolvedValueOnce(fileHandleMock);
+      (fs.open as jest.MockedFunction<typeof fs.open>).mockResolvedValueOnce(fileHandleMock as any);
       
       // Создаем большой новый контент с перекрытием в начале
       const newContent = 'overlap_data' + 'b'.repeat(10000);
