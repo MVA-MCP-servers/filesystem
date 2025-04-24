@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import * as fs from 'fs/promises';
+import { Stats } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { mockProcessCwd } from './mock-helpers';
 
 // Простая функция для демонстрации типизации моков
 async function readAndProcessFile(filePath: string): Promise<string> {
@@ -44,7 +46,7 @@ describe('Typing Check', () => {
     // Типизация для process.cwd мока
     const origCwd = process.cwd;
     try {
-      (process.cwd as unknown as jest.MockedFunction<typeof process.cwd>) = jest.fn().mockReturnValue('/mocked/path');
+      const cwdSpy = mockProcessCwd('/mocked/path');
       
       expect(process.cwd()).toBe('/mocked/path');
     } finally {
