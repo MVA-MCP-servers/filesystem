@@ -565,7 +565,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     {
       name: "read_file",
       description:
-        "Read the complete contents of a file from the file system. " +
+        "Read the contents of a file from the file system. " +
+        "For files larger than 1MB, only the first 1MB is returned to avoid overwhelming the LLM. " +
         "Handles various text encodings and provides detailed error messages " +
         "if the file cannot be read. Use this tool when you need to examine " +
         "the contents of a single file. Only works within allowed directories.",
@@ -643,9 +644,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       description:
         "Read the contents of multiple files simultaneously. This is more " +
         "efficient than reading files one by one when you need to analyze " +
-        "or compare multiple files. Each file's content is returned with its " +
-        "path as a reference. Failed reads for individual files won't stop " +
-        "the entire operation. Only works within allowed directories.",
+        "or compare multiple files. For files larger than 1MB, only the first 1MB is returned. " +
+        "Each file's content is returned with its path as a reference. Failed reads for " +
+        "individual files won't stop the entire operation. Only works within allowed directories.",
       inputSchema: zodToJsonSchema(ReadMultipleFilesArgsSchema) as ToolInput,
     },
     {
@@ -693,6 +694,36 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 });
 
 
+// Константа для максимального размера файла, который читается целиком
+const MAX_INLINE_SIZE = 1024 * 1024; // 1 МБ
+
+/**
+ * Чтение файла с ограничением размера для больших файлов
+ * Если размер файла превышает MAX_INLINE_SIZE, возвращается только первая часть файла
+ */
+async function readFileWithSizeLimit(filePath: string): Promise<string> {
+  const stats = await fs.stat(filePath);
+  
+  // Если файл большой, читаем только первую порцию
+  if (stats.size > MAX_INLINE_SIZE) {
+    log('info', `Большой файл (${stats.size} байт), чтение только первых ${MAX_INLINE_SIZE} байт: ${filePath}`);
+    
+    const fd = await fs.open(filePath, 'r');
+    const buffer = Buffer.alloc(MAX_INLINE_SIZE);
+    await fd.read(buffer, 0, MAX_INLINE_SIZE, 0);
+    await fd.close();
+    
+    const partialContent = buffer.toString('utf8');
+    const warningMsg = `\n\n[⚠️ Предупреждение: Файл слишком большой (${Math.round(stats.size / 1024)} КБ), `+
+                      `показаны только первые ${Math.round(MAX_INLINE_SIZE / 1024)} КБ из ${Math.round(stats.size / 1024)} КБ]`;
+    
+    return partialContent + warningMsg;
+  }
+  
+  // Для небольших файлов - стандартное чтение целиком
+  return await fs.readFile(filePath, 'utf8');
+}
+
 server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   try {
     const { name, arguments: args } = request.params;
@@ -704,7 +735,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
           throw new Error(`Invalid arguments for read_file: ${parsed.error}`);
         }
         const validPath = await validatePath(parsed.data.path);
-        const content = await fs.readFile(validPath, "utf-8");
+        const content = await readFileWithSizeLimit(validPath);
         return {
           content: [{ type: "text", text: content }],
         };
@@ -724,7 +755,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
             global.DEBUG_LEVEL = parsed.data.logLevel;
           }
               const validPath = await validatePath(filePath);
-              const content = await fs.readFile(validPath, "utf-8");
+              const content = await readFileWithSizeLimit(validPath);
               return `${filePath}:\n${content}\n`;
             } catch (error) {
               const errorMessage = error instanceof Error ? error.message : String(error);
