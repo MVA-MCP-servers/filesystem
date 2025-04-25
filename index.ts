@@ -311,6 +311,14 @@ const ReadFileArgsSchema = z.object({
   path: z.string(),
 });
 
+const StreamReadFileArgsSchema = z.object({
+  path: z.string(),
+  offset: z.number().optional().default(0),
+  limit: z.number().optional(),
+  encoding: z.string().optional().default('utf8'),
+  chunkSize: z.number().optional().default(DEFAULT_CHUNK_SIZE),
+});
+
 const ReadMultipleFilesArgsSchema = z.object({
   paths: z.array(z.string()),
   logLevel: z.enum(['debug', 'info', 'warn', 'error']).optional(),
@@ -573,6 +581,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       inputSchema: zodToJsonSchema(ReadFileArgsSchema) as ToolInput,
     },
     {
+      name: "stream_read_file",
+      description:
+        "Read large files with streaming support and precise control over reading positions. " +
+        "Allows specifying offset (starting position), limit (maximum bytes to read), " +
+        "and encoding. Perfect for processing large files in manageable chunks " +
+        "or extracting specific portions of large files without loading the entire file. " +
+        "Use this tool when standard read_file fails due to file size limitations " +
+        "or when you need to read specific parts of a file. Only works within allowed directories.",
+      inputSchema: zodToJsonSchema(StreamReadFileArgsSchema) as ToolInput,
+    },
+    {
       name: "write_file",
       description:
         "Create a new file or completely overwrite an existing file with new content. " +
@@ -694,8 +713,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 });
 
 
-// Константа для максимального размера файла, который читается целиком
-const MAX_INLINE_SIZE = 1024 * 1024; // 1 МБ
+// Константы для работы с размером файлов
+const MAX_INLINE_SIZE = 1024 * 1024; // 1 МБ - максимальный размер для прямого чтения
+const DEFAULT_CHUNK_SIZE = 512 * 1024; // 512 КБ - размер чанка для потокового чтения
+
+interface ReadOptions {
+  offset?: number;     // Начальная позиция чтения (в байтах)
+  limit?: number;      // Максимальное количество байт для чтения
+  encoding?: string;   // Кодировка ('utf8', 'base64', и т.д.)
+  chunkSize?: number;  // Размер чанка для потокового чтения
+}
 
 /**
  * Чтение файла с ограничением размера для больших файлов
@@ -724,6 +751,78 @@ async function readFileWithSizeLimit(filePath: string): Promise<string> {
   return await fs.readFile(filePath, 'utf8');
 }
 
+/**
+ * Потоковое чтение файла с поддержкой указания смещения, лимита и кодировки
+ * Позволяет читать большие файлы по частям с заданного смещения
+ */
+async function streamReadFile(filePath: string, options: ReadOptions = {}): Promise<string> {
+  const {
+    offset = 0,
+    limit,
+    encoding = 'utf8',
+    chunkSize = DEFAULT_CHUNK_SIZE
+  } = options;
+
+  const stats = await fs.stat(filePath);
+  const fileSize = stats.size;
+  
+  // Проверка, что смещение не превышает размер файла
+  if (offset >= fileSize) {
+    throw new Error(`Offset ${offset} exceeds file size ${fileSize}`);
+  }
+
+  // Определяем, сколько данных нужно прочитать
+  const bytesToRead = limit ? Math.min(limit, fileSize - offset) : fileSize - offset;
+  log('debug', `Stream reading ${bytesToRead} bytes from offset ${offset} in file ${filePath}`);
+
+  // Для очень маленьких файлов или маленьких чанков используем прямое чтение
+  if (bytesToRead <= chunkSize) {
+    const fd = await fs.open(filePath, 'r');
+    const buffer = Buffer.alloc(bytesToRead);
+    await fd.read(buffer, 0, bytesToRead, offset);
+    await fd.close();
+    return buffer.toString(encoding as BufferEncoding);
+  }
+
+  // Для больших объемов используем чтение по чанкам
+  const chunks: Buffer[] = [];
+  let bytesRead = 0;
+  const fd = await fs.open(filePath, 'r');
+
+  try {
+    while (bytesRead < bytesToRead) {
+      // Размер текущего чанка
+      const currentChunkSize = Math.min(chunkSize, bytesToRead - bytesRead);
+      const buffer = Buffer.alloc(currentChunkSize);
+
+      // Читаем чанк
+      const result = await fd.read(buffer, 0, currentChunkSize, offset + bytesRead);
+      
+      // Проверяем результат чтения
+      if (result.bytesRead === 0) {
+        // Если ничего не прочитано, значит достигли конца файла
+        break;
+      }
+      
+      // Если прочитали меньше чем ожидали, обрезаем буфер
+      if (result.bytesRead < currentChunkSize) {
+        chunks.push(buffer.slice(0, result.bytesRead));
+      } else {
+        chunks.push(buffer);
+      }
+      
+      bytesRead += result.bytesRead;
+    }
+  } finally {
+    // Всегда закрываем файловый дескриптор
+    await fd.close();
+  }
+
+  // Объединяем все чанки и возвращаем строку
+  const completeBuffer = Buffer.concat(chunks);
+  return completeBuffer.toString(encoding as BufferEncoding);
+}
+
 server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   try {
     const { name, arguments: args } = request.params;
@@ -739,6 +838,47 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         return {
           content: [{ type: "text", text: content }],
         };
+      }
+      
+      case "stream_read_file": {
+        const parsed = StreamReadFileArgsSchema.safeParse(args);
+        if (!parsed.success) {
+          throw new Error(`Invalid arguments for stream_read_file: ${parsed.error}`);
+        }
+        const validPath = await validatePath(parsed.data.path);
+        const { offset, limit, encoding, chunkSize } = parsed.data;
+        
+        try {
+          // Получаем информацию о файле для включения в ответ
+          const stats = await fs.stat(validPath);
+          const fileSize = stats.size;
+          
+          // Вычисляем фактические границы чтения
+          const effectiveOffset = Math.min(offset, fileSize);
+          const effectiveLimit = limit ? Math.min(limit, fileSize - effectiveOffset) : fileSize - effectiveOffset;
+          
+          log('info', `Streaming file ${validPath} - Offset: ${effectiveOffset}, Limit: ${effectiveLimit}, ` +
+                      `Total file size: ${fileSize}`);
+          
+          const content = await streamReadFile(validPath, {
+            offset: effectiveOffset,
+            limit: effectiveLimit,
+            encoding,
+            chunkSize
+          });
+          
+          // Формируем информационное сообщение о чтении
+          const infoMsg = `\n\n[ℹ️ Потоковое чтение: прочитано ${effectiveLimit} байт из ${fileSize} байт файла, ` +
+                        `начиная с позиции ${effectiveOffset}]`;
+          
+          return {
+            content: [{ type: "text", text: content + infoMsg }],
+          };
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          log('error', `Ошибка при потоковом чтении файла ${validPath}: ${errorMessage}`);
+          throw new Error(`Stream read file error: ${errorMessage}`);
+        }
       }
 
       case "read_multiple_files": {
