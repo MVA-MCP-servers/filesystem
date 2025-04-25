@@ -211,7 +211,9 @@ if (args.length === 0) {
 
 // Normalize all paths consistently
 function normalizePath(p: string): string {
-  return path.normalize(p);
+  // Заменяем все виды слэшей на OS-специфичный разделитель
+  const unified = p.replace(/[\\/]+/g, path.sep);
+  return path.normalize(unified);
 }
 
 function expandHome(filepath: string): string {
