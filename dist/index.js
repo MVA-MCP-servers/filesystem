@@ -9,20 +9,16 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { createTwoFilesPatch } from 'diff';
 import { minimatch } from 'minimatch';
-// Настройки логирования
-const DEBUG_LEVEL = process.env.DEBUG_LEVEL || 'info'; // 'debug', 'info', 'warn', 'error'
-// Функция логирования
+// Устанавливаем глобальное значение уровня логирования
+global.DEBUG_LEVEL = process.env.DEBUG_LEVEL || 'info'; // 'debug', 'info', 'warn', 'error'
+// Функция логирования - всегда используем stderr для предотвращения смешивания с JSON-RPC
 function log(level, message) {
     const levels = { debug: 0, info: 1, warn: 2, error: 3 };
-    if ((levels[level] ?? 3) >= (levels[DEBUG_LEVEL] ?? 1)) {
-        if (level === 'debug')
-            console.debug(message);
-        else if (level === 'info')
-            console.info(message);
-        else if (level === 'warn')
-            console.warn(message);
-        else
-            console.error(message);
+    if ((levels[level] ?? 3) >= (levels[global.DEBUG_LEVEL] ?? 1)) {
+        // Всегда пишем в stderr независимо от уровня логирования
+        // Добавляем временную метку для упрощения анализа логов в долгосрочной перспективе
+        const prefix = `[${new Date().toISOString()}] [filesystem] [${level}]`;
+        console.error(`${prefix} ${message}`);
     }
 }
 /**
@@ -184,7 +180,9 @@ if (args.length === 0) {
 }
 // Normalize all paths consistently
 function normalizePath(p) {
-    return path.normalize(p);
+    // Заменяем все виды слэшей на OS-специфичный разделитель
+    const unified = p.replace(/[\\/]+/g, path.sep);
+    return path.normalize(unified);
 }
 function expandHome(filepath) {
     if (filepath.startsWith('~/') || filepath === '~') {
@@ -273,6 +271,7 @@ const ReadFileArgsSchema = z.object({
 });
 const ReadMultipleFilesArgsSchema = z.object({
     paths: z.array(z.string()),
+    logLevel: z.enum(['debug', 'info', 'warn', 'error']).optional(),
 });
 const WriteFileArgsSchema = z.object({
     path: z.string(),
@@ -456,7 +455,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     const basicTools = [
         {
             name: "read_file",
-            description: "Read the complete contents of a file from the file system. " +
+            description: "Read the contents of a file from the file system. " +
+                "For files larger than 1MB, only the first 1MB is returned to avoid overwhelming the LLM. " +
                 "Handles various text encodings and provides detailed error messages " +
                 "if the file cannot be read. Use this tool when you need to examine " +
                 "the contents of a single file. Only works within allowed directories.",
@@ -525,9 +525,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             name: "read_multiple_files",
             description: "Read the contents of multiple files simultaneously. This is more " +
                 "efficient than reading files one by one when you need to analyze " +
-                "or compare multiple files. Each file's content is returned with its " +
-                "path as a reference. Failed reads for individual files won't stop " +
-                "the entire operation. Only works within allowed directories.",
+                "or compare multiple files. For files larger than 1MB, only the first 1MB is returned. " +
+                "Each file's content is returned with its path as a reference. Failed reads for " +
+                "individual files won't stop the entire operation. Only works within allowed directories.",
             inputSchema: zodToJsonSchema(ReadMultipleFilesArgsSchema),
         },
         {
@@ -568,6 +568,29 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         tools: allTools
     };
 });
+// Константа для максимального размера файла, который читается целиком
+const MAX_INLINE_SIZE = 1024 * 1024; // 1 МБ
+/**
+ * Чтение файла с ограничением размера для больших файлов
+ * Если размер файла превышает MAX_INLINE_SIZE, возвращается только первая часть файла
+ */
+async function readFileWithSizeLimit(filePath) {
+    const stats = await fs.stat(filePath);
+    // Если файл большой, читаем только первую порцию
+    if (stats.size > MAX_INLINE_SIZE) {
+        log('info', `Большой файл (${stats.size} байт), чтение только первых ${MAX_INLINE_SIZE} байт: ${filePath}`);
+        const fd = await fs.open(filePath, 'r');
+        const buffer = Buffer.alloc(MAX_INLINE_SIZE);
+        await fd.read(buffer, 0, MAX_INLINE_SIZE, 0);
+        await fd.close();
+        const partialContent = buffer.toString('utf8');
+        const warningMsg = `\n\n[⚠️ Предупреждение: Файл слишком большой (${Math.round(stats.size / 1024)} КБ), ` +
+            `показаны только первые ${Math.round(MAX_INLINE_SIZE / 1024)} КБ из ${Math.round(stats.size / 1024)} КБ]`;
+        return partialContent + warningMsg;
+    }
+    // Для небольших файлов - стандартное чтение целиком
+    return await fs.readFile(filePath, 'utf8');
+}
 server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     try {
         const { name, arguments: args } = request.params;
@@ -578,7 +601,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                     throw new Error(`Invalid arguments for read_file: ${parsed.error}`);
                 }
                 const validPath = await validatePath(parsed.data.path);
-                const content = await fs.readFile(validPath, "utf-8");
+                const content = await readFileWithSizeLimit(validPath);
                 return {
                     content: [{ type: "text", text: content }],
                 };
@@ -591,12 +614,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                 const results = await Promise.all(parsed.data.paths.map(async (filePath) => {
                     try {
                         // Временно изменяем уровень логирования, если пользователь его указал
-                        const prevDebugLevel = DEBUG_LEVEL;
+                        const prevDebugLevel = global.DEBUG_LEVEL;
                         if (parsed.data.logLevel) {
                             global.DEBUG_LEVEL = parsed.data.logLevel;
                         }
                         const validPath = await validatePath(filePath);
-                        const content = await fs.readFile(validPath, "utf-8");
+                        const content = await readFileWithSizeLimit(validPath);
                         return `${filePath}:\n${content}\n`;
                     }
                     catch (error) {
@@ -650,7 +673,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                 const validPath = await validatePath(parsed.data.path);
                 try {
                     // Временно изменяем уровень логирования, если пользователь его указал
-                    const prevDebugLevel = DEBUG_LEVEL;
+                    const prevDebugLevel = global.DEBUG_LEVEL;
                     if (parsed.data.logLevel) {
                         global.DEBUG_LEVEL = parsed.data.logLevel;
                     }
@@ -826,4 +849,4 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 const transport = new StdioServerTransport();
 server.connect(transport);
 log('info', `Secure filesystem server started. Allowed directories: ${allowedDirectories.join(', ')}`);
-log('info', `Logging level: ${DEBUG_LEVEL}`);
+log('info', `Logging level: ${global.DEBUG_LEVEL}`);
