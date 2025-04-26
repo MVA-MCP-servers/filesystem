@@ -11,14 +11,36 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { diffLines, createTwoFilesPatch } from 'diff';
 import { minimatch } from 'minimatch';
 
-// Настройки логирования - используем глобальную переменную для возможности изменения
+// Глобальные настройки и конфигурация
 // Расширяем global для правильного типизированного доступа
 declare global {
   var DEBUG_LEVEL: string;
+  var ESTIMATED_TOKENS_LEFT: number;
 }
+
+// Конфигурация сервера
+const config = {
+  // Общие настройки
+  autoOptimizeWriteOperations: true,  // Включить автоматическую оптимизацию функций записи
+  tokenEstimationEnabled: true,       // Включить оценку токенов
+  
+  // Пороговые значения
+  smartWriteThreshold: 100000,        // Размер контента (в символах) для перенаправления на smart_append_file
+  largeFileThreshold: 1024 * 1024,    // Размер "большого файла" (1 МБ)
+  
+  // Типы контента
+  binaryContentExtensions: ['.bin', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.zip', '.rar', '.7z', '.tar', '.gz'],
+  
+  // Параметры оценки токенов
+  defaultTokensEstimate: 50000,       // Оценка по умолчанию для количества оставшихся токенов
+  symbolsPerToken: 4,                 // Примерное количество символов на один токен
+};
 
 // Устанавливаем глобальное значение уровня логирования
 global.DEBUG_LEVEL = process.env.DEBUG_LEVEL || 'info'; // 'debug', 'info', 'warn', 'error'
+
+// Инициализация оценки оставшихся токенов
+global.ESTIMATED_TOKENS_LEFT = config.defaultTokensEstimate;
 
 // Функция логирования - всегда используем stderr для предотвращения смешивания с JSON-RPC
 function log(level: string, message: string): void {
@@ -913,7 +935,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         if (!parsed.success) {
           throw new Error(`Invalid arguments for write_file: ${parsed.error}`);
         }
+        
         const validPath = await validatePath(parsed.data.path);
+        
+        // Если включена автоматическая оптимизация, используем оптимизированную запись
+        if (config.autoOptimizeWriteOperations) {
+          return await performOptimizedWrite({
+            path: validPath,
+            content: parsed.data.content,
+            requestedFunction: 'write_file',
+            isFullRewrite: true
+          });
+        }
+        
+        // Стандартное поведение, если оптимизация отключена
         await fs.writeFile(validPath, parsed.data.content, "utf-8");
         return {
           content: [{ type: "text", text: `Successfully wrote to ${parsed.data.path}` }],
@@ -925,9 +960,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
         if (!parsed.success) {
           throw new Error(`Invalid arguments for append_file: ${parsed.error}`);
         }
+        
         const validPath = await validatePath(parsed.data.path);
         
-        // Использование опции флага 'a' для добавления в конец файла
+        // Если включена автоматическая оптимизация, используем оптимизированную запись
+        if (config.autoOptimizeWriteOperations) {
+          return await performOptimizedWrite({
+            path: validPath,
+            content: parsed.data.content,
+            requestedFunction: 'append_file',
+            isFullRewrite: false
+          });
+        }
+        
+        // Стандартное поведение, если оптимизация отключена
         try {
           // Открываем файл для добавления данных
           const fileHandle = await fs.open(validPath, 'a+');
@@ -1165,3 +1211,107 @@ server.connect(transport);
 log('info', `Secure filesystem server started. Allowed directories: ${allowedDirectories.join(', ')}`);
 log('info', `Logging level: ${global.DEBUG_LEVEL}`);
 
+шого контента (особенно при работе с LLM) или высоких требованиях к ресурсам, smart_append может быть более эффективным
+    selectedFunction = options.fileExists ? 'smart_append_file' : 'write_file';
+  }
+
+  // Для больших объемов данных (особенно при работе с LLM) всегда предпочитаем smart_append_file
+  const contentLength = options.content.length;
+  if (contentLength > config.smartWriteThreshold) {
+    // Оцениваем количество токенов, необходимых для обработки контента
+    const contentTokens = Math.ceil(contentLength / config.symbolsPerToken);
+    const remainingTokens = estimateRemainingTokens();
+    
+    // Если размер контента приближается к лимиту токенов, используем smart_append_file
+    if (contentTokens > remainingTokens * 0.5) { // Если контент использует больше 50% оставшихся токенов
+      selectedFunction = 'smart_append_file';
+      log('info', `Large content detected (${contentLength} chars, ~${contentTokens} tokens) with ${remainingTokens} tokens remaining. Using smart_append_file for ${options.path}`);
+    }
+  }
+  
+  // Если контент небольшой и файл не существует, используем простую запись
+  if (contentLength < 1000 && !options.fileExists) {
+    selectedFunction = 'write_file';
+  }
+
+  // Учитываем явные предпочтения пользователя, если они указаны
+  if (options.requestedFunction) {
+    // Логируем только если мы рекомендуем другую функцию
+    if (options.requestedFunction !== selectedFunction) {
+      log('debug', `User requested ${options.requestedFunction}, but ${selectedFunction} might be more optimal for ${options.path}`);
+    }
+    // Возвращаем запрошенную пользователем функцию
+    return options.requestedFunction as WriteFunction;
+  }
+
+  return selectedFunction;
+}
+
+/**
+ * Выполняет операцию записи файла с помощью оптимальной функции
+ * @param options Параметры операции записи
+ * @returns Результат операции в формате ответа API
+ */
+async function performOptimizedWrite(options: WriteOperationOptions): Promise<any> {
+  // Проверяем существование файла и получаем его размер, если файл существует
+  let fileExists = options.fileExists;
+  let fileSize = options.fileSize || 0;
+  
+  if (fileExists === undefined) {
+    try {
+      const stats = await fs.stat(options.path);
+      fileExists = true;
+      fileSize = stats.size;
+    } catch {
+      fileExists = false;
+      fileSize = 0;
+    }
+  }
+  
+  // Обновляем параметры
+  options.fileExists = fileExists;
+  options.fileSize = fileSize;
+  
+  // Определяем оптимальную функцию для записи
+  const optimalFunction = determineOptimalWriteFunction(options);
+  
+  // Выполняем запись с помощью выбранной функции
+  try {
+    switch (optimalFunction) {
+      case 'write_file':
+        await fs.writeFile(options.path, options.content, "utf-8");
+        break;
+        
+      case 'append_file':
+        const fileHandle = await fs.open(options.path, 'a+');
+        await fileHandle.writeFile(options.content, "utf-8");
+        await fileHandle.close();
+        break;
+        
+      case 'smart_append_file':
+        await smartAppend(options.path, options.content);
+        break;
+    }
+    
+    // Обновляем оценку оставшихся токенов
+    updateTokenEstimation(options.content.length);
+    
+    // Формируем информативное сообщение
+    let message = `Successfully wrote to ${options.path}`;
+    
+    // Если функция отличается от запрошенной, добавляем информацию о выборе
+    if (options.requestedFunction && options.requestedFunction !== optimalFunction) {
+      message += ` (automatically used ${optimalFunction} for optimal performance)`;
+    }
+    
+    return {
+      content: [{ type: "text", text: message }],
+      optimizedWrite: true,
+      usedFunction: optimalFunction
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    log('error', `Error during optimized write to ${options.path}: ${errorMessage}`);
+    throw new Error(`Failed to write file: ${errorMessage}`);
+  }
+}
