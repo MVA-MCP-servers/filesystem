@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+// Интерфейс для параметров чтения файлов
+
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, ToolSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -10,8 +12,8 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { diffLines, createTwoFilesPatch } from 'diff';
 import { minimatch } from 'minimatch';
-import { enhancedPerformOptimizedWrite } from './lib/content-completion-integration';
-import { isContentComplete, removeCompletionMarker, determineOptimalWriteMethod } from './lib/content-completion-marker';
+import { enhancedPerformOptimizedWrite } from './lib/content-completion-integration.js';
+import { isContentComplete, removeCompletionMarker, determineOptimalWriteMethod } from './lib/content-completion-marker.js';
 
 // Строго типизируем глобальные переменные
 declare global {

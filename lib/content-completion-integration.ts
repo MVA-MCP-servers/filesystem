@@ -11,7 +11,7 @@ import {
   ContentCompletionConfig,
   DEFAULT_CONFIG,
   prepareWriteOperation
-} from './content-completion-marker';
+} from './content-completion-marker.js';
 
 /**
  * Расширенные опции для функции записи файла
