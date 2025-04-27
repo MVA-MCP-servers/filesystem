@@ -52,6 +52,30 @@ global.DEBUG_LEVEL = process.env.DEBUG_LEVEL || 'info'; // 'debug', 'info', 'war
 // Инициализация оценки оставшихся токенов
 global.ESTIMATED_TOKENS_LEFT = config.defaultTokensEstimate;
 
+/**
+ * Оценивает количество оставшихся токенов на основе текущего состояния
+ * @returns Оценка оставшихся токенов
+ */
+function estimateRemainingTokens(): number {
+  return global.ESTIMATED_TOKENS_LEFT;
+}
+
+/**
+ * Обновляет оценку оставшихся токенов после обработки контента
+ * @param contentLength Длина обработанного контента
+ */
+function updateTokenEstimation(contentLength: number): void {
+  if (config.tokenEstimationEnabled) {
+    // Оцениваем количество использованных токенов
+    const tokensUsed = Math.ceil(contentLength / config.symbolsPerToken);
+    
+    // Уменьшаем оценку оставшихся токенов
+    global.ESTIMATED_TOKENS_LEFT = Math.max(0, global.ESTIMATED_TOKENS_LEFT - tokensUsed);
+    
+    log('debug', `Token estimation: used ~${tokensUsed} tokens, remaining ~${global.ESTIMATED_TOKENS_LEFT} tokens`);
+  }
+}
+
 // Функция логирования - всегда используем stderr для предотвращения смешивания с JSON-RPC
 function log(level: string, message: string): void {
   const levels: {[key: string]: number} = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -430,6 +454,29 @@ interface FileInfo {
   isDirectory: boolean;
   isFile: boolean;
   permissions: string;
+}
+
+/**
+ * Типы функций записи файлов
+ */
+type WriteFunction = 'write_file' | 'append_file' | 'smart_append_file';
+
+/**
+ * Параметры для операции записи файла
+ */
+interface WriteOperationOptions {
+  /** Путь к файлу */
+  path: string;
+  /** Содержимое для записи */
+  content: string;
+  /** Существует ли файл (если известно) */
+  fileExists?: boolean;
+  /** Размер файла (если известен) */
+  fileSize?: number;
+  /** Функция записи, запрошенная пользователем */
+  requestedFunction?: string;
+  /** Флаг полной перезаписи */
+  isFullRewrite?: boolean;
 }
 
 // Server setup
@@ -1225,39 +1272,39 @@ server.connect(transport);
 log('info', `Secure filesystem server started. Allowed directories: ${allowedDirectories.join(', ')}`);
 log('info', `Logging level: ${global.DEBUG_LEVEL}`);
 
-шого контента (особенно при работе с LLM) или высоких требованиях к ресурсам, smart_append может быть более эффективным
-    selectedFunction = options.fileExists ? 'smart_append_file' : 'write_file';
-  }
 
-  // Для больших объемов данных (особенно при работе с LLM) всегда предпочитаем smart_append_file
-  const contentLength = options.content.length;
-  if (contentLength > config.smartWriteThreshold) {
-    // Оцениваем количество токенов, необходимых для обработки контента
-    const contentTokens = Math.ceil(contentLength / config.symbolsPerToken);
-    const remainingTokens = estimateRemainingTokens();
-    
-    // Если размер контента приближается к лимиту токенов, используем smart_append_file
-    if (contentTokens > remainingTokens * 0.5) { // Если контент использует больше 50% оставшихся токенов
-      selectedFunction = 'smart_append_file';
-      log('info', `Large content detected (${contentLength} chars, ~${contentTokens} tokens) with ${remainingTokens} tokens remaining. Using smart_append_file for ${options.path}`);
-    }
+
+/**
+ * Определяет оптимальную функцию для записи файла
+ * на основе анализа параметров
+ * @param options Параметры для определения метода записи
+ * @returns Название оптимального метода
+ */
+function determineOptimalWriteFunction(options: WriteOperationOptions): WriteFunction {
+  // По умолчанию для существующих файлов используем append, для новых - write
+  let selectedFunction: WriteFunction = options.fileExists ? 'append_file' : 'write_file';
+  
+  // Для больших файлов используем smart_append для предотвращения дублирования
+  if (options.fileSize && options.fileSize > config.largeFileThreshold) {
+    selectedFunction = 'smart_append_file';
   }
   
-  // Если контент небольшой и файл не существует, используем простую запись
-  if (contentLength < 1000 && !options.fileExists) {
+  // Для длинного контента предпочитаем smart_append
+  if (options.content.length > config.smartWriteThreshold) {
+    selectedFunction = 'smart_append_file';
+  }
+  
+  // Если запрошена полная перезапись, используем write_file
+  if (options.isFullRewrite) {
     selectedFunction = 'write_file';
   }
-
-  // Учитываем явные предпочтения пользователя, если они указаны
-  if (options.requestedFunction) {
-    // Логируем только если мы рекомендуем другую функцию
-    if (options.requestedFunction !== selectedFunction) {
-      log('debug', `User requested ${options.requestedFunction}, but ${selectedFunction} might be more optimal for ${options.path}`);
-    }
-    // Возвращаем запрошенную пользователем функцию
+  
+  // Если запрошена конкретная функция, используем её
+  if (options.requestedFunction && 
+      (['write_file', 'append_file', 'smart_append_file'].includes(options.requestedFunction))) {
     return options.requestedFunction as WriteFunction;
   }
-
+  
   return selectedFunction;
 }
 
