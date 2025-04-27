@@ -67,7 +67,11 @@ function log(level: string, message: string): void {
  * «Умный» append: дописывает только ту часть content,
  * которой ещё нет в конце файла по пути filePath.
  * Использует динамический размер буфера для надёжного поиска перекрытий.
+ * 
+ * Экспортируем функцию для использования в других модулях
  */
+// Делаем функцию доступной в глобальной области видимости для использования в модулях интеграции
+(global as any).smartAppend = smartAppend;
 async function smartAppend(filePath: string, content: string, initialChunkSize = 1024): Promise<void> {
   // Задаём константы для стратегии динамического изменения буфера
   const MAX_CHUNK_SIZE = 1024 * 1024; // 1 МБ
@@ -1263,6 +1267,23 @@ log('info', `Logging level: ${global.DEBUG_LEVEL}`);
  * @returns Результат операции в формате ответа API
  */
 async function performOptimizedWrite(options: WriteOperationOptions): Promise<any> {
+  // Создаем параметры для улучшенной функции с поддержкой маркеров завершения
+  const enhancedOptions = {
+    ...options,
+    contentCompletionConfig: {
+      CONTENT_COMPLETION_MARKER: config.contentCompletionMarker.marker,
+      LARGE_CONTENT_THRESHOLD: config.contentCompletionMarker.sizeThreshold,
+      BINARY_CONTENT_EXTENSIONS: config.binaryContentExtensions,
+      DEBUG: global.DEBUG_LEVEL === 'debug'
+    }
+  };
+  
+  // Вызываем улучшенную функцию для обработки маркеров завершения
+  if (config.contentCompletionMarker.enabled) {
+    return await enhancedPerformOptimizedWrite(enhancedOptions);
+  }
+
+  // Если функциональность маркеров завершения отключена, используем стандартную логику
   // Проверяем существование файла и получаем его размер, если файл существует
   let fileExists = options.fileExists;
   let fileSize = options.fileSize || 0;

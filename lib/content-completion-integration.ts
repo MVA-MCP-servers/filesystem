@@ -6,6 +6,7 @@
  */
 
 import * as fs from 'fs/promises';
+import path from 'path';
 import { 
   ContentCompletionConfig,
   DEFAULT_CONFIG,
@@ -33,11 +34,12 @@ export interface EnhancedWriteOptions {
   contentCompletionConfig?: ContentCompletionConfig;
 }
 
+// Объявляем функцию smartAppend для ее использования в модуле
+// Эта функция определена в основном модуле index.ts
+declare function smartAppend(filePath: string, content: string, initialChunkSize?: number): Promise<void>;
+
 /**
  * Модифицированная версия функции performOptimizedWrite с поддержкой маркера завершения
- * 
- * Вставьте эту функцию в файл index.ts, заменив существующую функцию performOptimizedWrite,
- * или создайте новую функцию и вызывайте ее из существующей.
  * 
  * @param options Параметры записи
  * @returns Результат операции в формате ответа API
@@ -45,7 +47,7 @@ export interface EnhancedWriteOptions {
 export async function enhancedPerformOptimizedWrite(options: EnhancedWriteOptions): Promise<any> {
   // Распаковываем параметры с значениями по умолчанию
   const { 
-    path, 
+    path: filePath, 
     content, 
     fileExists: initialFileExists, 
     fileSize: initialFileSize = 0,
@@ -61,7 +63,7 @@ export async function enhancedPerformOptimizedWrite(options: EnhancedWriteOption
   // Если информация о существовании файла не предоставлена, проверяем
   if (fileExists === undefined) {
     try {
-      const stats = await fs.stat(path);
+      const stats = await fs.stat(filePath);
       fileExists = true;
       fileSize = stats.size;
     } catch {
@@ -72,7 +74,7 @@ export async function enhancedPerformOptimizedWrite(options: EnhancedWriteOption
   
   // Подготавливаем параметры с учетом маркера завершения
   const preparedOptions = prepareWriteOperation({
-    path,
+    path: filePath,
     content,
     fileExists,
     fileSize,
@@ -87,36 +89,32 @@ export async function enhancedPerformOptimizedWrite(options: EnhancedWriteOption
   
   // Выполняем запись с помощью выбранной функции
   try {
-    // Примечание: здесь нужно использовать реальные функции записи из вашего кода
+    // Вызываем соответствующую функцию записи файла
     switch (optimalFunction) {
       case 'write_file':
-        await fs.writeFile(path, cleanedContent, "utf-8");
+        if (typeof cleanedContent === 'string') {
+          await fs.writeFile(filePath, cleanedContent, "utf-8");
+        } else {
+          await fs.writeFile(filePath, cleanedContent);
+        }
         break;
         
       case 'smart_append_file':
-        // Здесь нужно вызвать вашу функцию smartAppend
-        // await smartAppend(path, cleanedContent.toString());
-        
-        // Временная реализация, замените на вызов реальной функции
+        // Вызываем функцию smartAppend из основного модуля
         if (typeof cleanedContent === 'string') {
-          // Если файл не существует, создаем его
-          if (!fileExists) {
-            await fs.writeFile(path, cleanedContent, "utf-8");
-          } else {
-            // Если файл существует, дописываем в него
-            const fileHandle = await fs.open(path, 'a');
-            await fileHandle.writeFile(cleanedContent, "utf-8");
-            await fileHandle.close();
-          }
+          // smartAppend определена в index.ts и доступна в глобальном контексте
+          // Однако при компиляции TypeScript необходимо объявить ее интерфейс выше
+          // Передаем в нее путь к файлу и очищенный контент
+          await (global as any).smartAppend(filePath, cleanedContent);
         } else {
-          // Для бинарных данных просто записываем
-          await fs.writeFile(path, cleanedContent);
+          // Для бинарных данных не можем использовать smart_append, просто записываем
+          await fs.writeFile(filePath, cleanedContent);
         }
         break;
     }
     
     // Формируем информативное сообщение
-    let message = `Successfully wrote to ${path}`;
+    let message = `Successfully wrote to ${filePath}`;
     
     // Если функция отличается от запрошенной, добавляем информацию о выборе
     if (requestedFunction && requestedFunction !== optimalFunction) {
@@ -126,7 +124,7 @@ export async function enhancedPerformOptimizedWrite(options: EnhancedWriteOption
     // Если обнаружен неполный контент, добавляем информацию об этом
     if (typeof content === 'string' && 
         !content.trim().endsWith(contentCompletionConfig.CONTENT_COMPLETION_MARKER)) {
-      message += ` (detected incomplete content, removed completion marker)`;
+      message += ` (detected incomplete content)`;
     }
     
     return {
@@ -136,47 +134,7 @@ export async function enhancedPerformOptimizedWrite(options: EnhancedWriteOption
     };
   } catch (error: any) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error(`Error during optimized write to ${path}: ${errorMessage}`);
+    console.error(`Error during optimized write to ${filePath}: ${errorMessage}`);
     throw new Error(`Failed to write file: ${errorMessage}`);
   }
 }
-
-/**
- * Инструкции по интеграции
- * 
- * Для интеграции функциональности маркера завершения в существующий код MCP Filesystem Server:
- * 
- * 1. Импортируйте модули в файле index.ts:
- *    import { ContentCompletionConfig, DEFAULT_CONFIG } from './lib/content-completion-marker';
- *    import { enhancedPerformOptimizedWrite } from './lib/content-completion-integration';
- * 
- * 2. Добавьте конфигурацию маркера завершения в общую конфигурацию:
- *    const config = {
- *      // Существующие настройки...
- *      
- *      // Настройки маркера завершения
- *      CONTENT_COMPLETION_MARKER: '// END_OF_CONTENT',
- *      LARGE_CONTENT_THRESHOLD: 100000, // 100KB
- *      BINARY_CONTENT_EXTENSIONS: ['.bin', '.pdf', ... и другие расширения ...],
- *    };
- * 
- * 3. Модифицируйте функцию performOptimizedWrite для использования улучшенной версии:
- *    async function performOptimizedWrite(options) {
- *      // Создаем параметры для улучшенной функции
- *      const enhancedOptions = {
- *        ...options,
- *        contentCompletionConfig: {
- *          CONTENT_COMPLETION_MARKER: config.CONTENT_COMPLETION_MARKER,
- *          LARGE_CONTENT_THRESHOLD: config.LARGE_CONTENT_THRESHOLD,
- *          BINARY_CONTENT_EXTENSIONS: config.BINARY_CONTENT_EXTENSIONS,
- *          DEBUG: config.DEBUG || false
- *        }
- *      };
- *      
- *      // Вызываем улучшенную функцию
- *      return await enhancedPerformOptimizedWrite(enhancedOptions);
- *    }
- * 
- * 4. Альтернативно, можно полностью заменить функцию performOptimizedWrite на содержимое
- *    функции enhancedPerformOptimizedWrite, адаптировав ее под существующий код.
- */
