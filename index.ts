@@ -13,18 +13,15 @@ import { minimatch } from 'minimatch';
 import { enhancedPerformOptimizedWrite } from './lib/content-completion-integration';
 import { isContentComplete, removeCompletionMarker, determineOptimalWriteMethod } from './lib/content-completion-marker';
 
-// Глобальные настройки и конфигурация
-// Расширяем global для правильного типизированного доступа
+// Строго типизируем глобальные переменные
 declare global {
   var DEBUG_LEVEL: string;
-  var ESTIMATED_TOKENS_LEFT: number;
 }
 
 // Конфигурация сервера
 const config = {
   // Общие настройки
   autoOptimizeWriteOperations: true,  // Включить автоматическую оптимизацию функций записи
-  tokenEstimationEnabled: true,       // Включить оценку токенов
   
   // Пороговые значения
   smartWriteThreshold: 100000,        // Размер контента (в символах) для перенаправления на smart_append_file
@@ -32,10 +29,6 @@ const config = {
   
   // Типы контента
   binaryContentExtensions: ['.bin', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.zip', '.rar', '.7z', '.tar', '.gz'],
-  
-  // Параметры оценки токенов
-  defaultTokensEstimate: 50000,       // Оценка по умолчанию для количества оставшихся токенов
-  symbolsPerToken: 4,                 // Примерное количество символов на один токен
 
   // Параметры маркера завершения контента
   contentCompletionMarker: {
@@ -48,33 +41,6 @@ const config = {
 
 // Устанавливаем глобальное значение уровня логирования
 global.DEBUG_LEVEL = process.env.DEBUG_LEVEL || 'info'; // 'debug', 'info', 'warn', 'error'
-
-// Инициализация оценки оставшихся токенов
-global.ESTIMATED_TOKENS_LEFT = config.defaultTokensEstimate;
-
-/**
- * Оценивает количество оставшихся токенов на основе текущего состояния
- * @returns Оценка оставшихся токенов
- */
-function estimateRemainingTokens(): number {
-  return global.ESTIMATED_TOKENS_LEFT;
-}
-
-/**
- * Обновляет оценку оставшихся токенов после обработки контента
- * @param contentLength Длина обработанного контента
- */
-function updateTokenEstimation(contentLength: number): void {
-  if (config.tokenEstimationEnabled) {
-    // Оцениваем количество использованных токенов
-    const tokensUsed = Math.ceil(contentLength / config.symbolsPerToken);
-    
-    // Уменьшаем оценку оставшихся токенов
-    global.ESTIMATED_TOKENS_LEFT = Math.max(0, global.ESTIMATED_TOKENS_LEFT - tokensUsed);
-    
-    log('debug', `Token estimation: used ~${tokensUsed} tokens, remaining ~${global.ESTIMATED_TOKENS_LEFT} tokens`);
-  }
-}
 
 // Функция логирования - всегда используем stderr для предотвращения смешивания с JSON-RPC
 function log(level: string, message: string): void {
@@ -1292,6 +1258,7 @@ function determineOptimalWriteFunction(options: WriteOperationOptions): WriteFun
   // Для длинного контента предпочитаем smart_append
   if (options.content.length > config.smartWriteThreshold) {
     selectedFunction = 'smart_append_file';
+    log('info', `Large content detected (${options.content.length} chars). Using smart_append_file for ${options.path}`);
   }
   
   // Если запрошена полная перезапись, используем write_file
@@ -1370,9 +1337,6 @@ async function performOptimizedWrite(options: WriteOperationOptions): Promise<an
         await smartAppend(options.path, options.content);
         break;
     }
-    
-    // Обновляем оценку оставшихся токенов
-    updateTokenEstimation(options.content.length);
     
     // Формируем информативное сообщение
     let message = `Successfully wrote to ${options.path}`;
