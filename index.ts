@@ -10,6 +10,8 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { diffLines, createTwoFilesPatch } from 'diff';
 import { minimatch } from 'minimatch';
+import { enhancedPerformOptimizedWrite } from './lib/content-completion-integration';
+import { isContentComplete, removeCompletionMarker, determineOptimalWriteMethod } from './lib/content-completion-marker';
 
 // Глобальные настройки и конфигурация
 // Расширяем global для правильного типизированного доступа
@@ -34,6 +36,14 @@ const config = {
   // Параметры оценки токенов
   defaultTokensEstimate: 50000,       // Оценка по умолчанию для количества оставшихся токенов
   symbolsPerToken: 4,                 // Примерное количество символов на один токен
+
+  // Параметры маркера завершения контента
+  contentCompletionMarker: {
+    enabled: true,                    // Включить функциональность маркера завершения
+    marker: "// END_OF_CONTENT",     // Строка маркера завершения
+    autoSmartAppend: true,           // Автоматически использовать smart_append если маркер отсутствует
+    sizeThreshold: 1024 * 1024       // Пороговое значение размера для определения метода записи
+  }
 };
 
 // Устанавливаем глобальное значение уровня логирования
