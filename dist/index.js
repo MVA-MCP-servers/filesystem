@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Константы для работы с размером файлов
+const MAX_INLINE_SIZE = 1024 * 1024; // 1 МБ - максимальный размер для прямого чтения
+const DEFAULT_CHUNK_SIZE = 512 * 1024; // 512 КБ - размер чанка для потокового чтения
+// Интерфейс для параметров чтения файлов
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, ToolSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -9,6 +13,24 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { createTwoFilesPatch } from 'diff';
 import { minimatch } from 'minimatch';
+import { enhancedPerformOptimizedWrite } from './lib/content-completion-integration.js';
+// Конфигурация сервера
+const config = {
+    // Общие настройки
+    autoOptimizeWriteOperations: true, // Включить автоматическую оптимизацию функций записи
+    // Пороговые значения
+    smartWriteThreshold: 100000, // Размер контента (в символах) для перенаправления на smart_append_file
+    largeFileThreshold: 1024 * 1024, // Размер "большого файла" (1 МБ)
+    // Типы контента
+    binaryContentExtensions: ['.bin', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.zip', '.rar', '.7z', '.tar', '.gz'],
+    // Параметры маркера завершения контента
+    contentCompletionMarker: {
+        enabled: true, // Включить функциональность маркера завершения
+        marker: "// END_OF_CONTENT", // Строка маркера завершения
+        autoSmartAppend: true, // Автоматически использовать smart_append если маркер отсутствует
+        sizeThreshold: 1024 * 1024 // Пороговое значение размера для определения метода записи
+    }
+};
 // Устанавливаем глобальное значение уровня логирования
 global.DEBUG_LEVEL = process.env.DEBUG_LEVEL || 'info'; // 'debug', 'info', 'warn', 'error'
 // Функция логирования - всегда используем stderr для предотвращения смешивания с JSON-RPC
@@ -25,7 +47,11 @@ function log(level, message) {
  * «Умный» append: дописывает только ту часть content,
  * которой ещё нет в конце файла по пути filePath.
  * Использует динамический размер буфера для надёжного поиска перекрытий.
+ *
+ * Экспортируем функцию для использования в других модулях
  */
+// Делаем функцию доступной в глобальной области видимости для использования в модулях интеграции
+global.smartAppend = smartAppend;
 async function smartAppend(filePath, content, initialChunkSize = 1024) {
     // Задаём константы для стратегии динамического изменения буфера
     const MAX_CHUNK_SIZE = 1024 * 1024; // 1 МБ
@@ -269,6 +295,13 @@ async function validatePath(requestedPath) {
 const ReadFileArgsSchema = z.object({
     path: z.string(),
 });
+const StreamReadFileArgsSchema = z.object({
+    path: z.string(),
+    offset: z.number().optional().default(0),
+    limit: z.number().optional(),
+    encoding: z.string().optional().default('utf8'),
+    chunkSize: z.number().optional().default(DEFAULT_CHUNK_SIZE),
+});
 const ReadMultipleFilesArgsSchema = z.object({
     paths: z.array(z.string()),
     logLevel: z.enum(['debug', 'info', 'warn', 'error']).optional(),
@@ -463,6 +496,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             inputSchema: zodToJsonSchema(ReadFileArgsSchema),
         },
         {
+            name: "stream_read_file",
+            description: "Read large files with streaming support and precise control over reading positions. " +
+                "Allows specifying offset (starting position), limit (maximum bytes to read), " +
+                "and encoding. Perfect for processing large files in manageable chunks " +
+                "or extracting specific portions of large files without loading the entire file. " +
+                "Use this tool when standard read_file fails due to file size limitations " +
+                "or when you need to read specific parts of a file. Only works within allowed directories.",
+            inputSchema: zodToJsonSchema(StreamReadFileArgsSchema),
+        },
+        {
             name: "write_file",
             description: "Create a new file or completely overwrite an existing file with new content. " +
                 "Use with caution as it will overwrite existing files without warning. " +
@@ -568,8 +611,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         tools: allTools
     };
 });
-// Константа для максимального размера файла, который читается целиком
-const MAX_INLINE_SIZE = 1024 * 1024; // 1 МБ
 /**
  * Чтение файла с ограничением размера для больших файлов
  * Если размер файла превышает MAX_INLINE_SIZE, возвращается только первая часть файла
@@ -591,6 +632,63 @@ async function readFileWithSizeLimit(filePath) {
     // Для небольших файлов - стандартное чтение целиком
     return await fs.readFile(filePath, 'utf8');
 }
+/**
+ * Потоковое чтение файла с поддержкой указания смещения, лимита и кодировки
+ * Позволяет читать большие файлы по частям с заданного смещения
+ */
+async function streamReadFile(filePath, options = {}) {
+    const { offset = 0, limit, encoding = 'utf8', chunkSize = DEFAULT_CHUNK_SIZE } = options;
+    const stats = await fs.stat(filePath);
+    const fileSize = stats.size;
+    // Проверка, что смещение не превышает размер файла
+    if (offset >= fileSize) {
+        throw new Error(`Offset ${offset} exceeds file size ${fileSize}`);
+    }
+    // Определяем, сколько данных нужно прочитать
+    const bytesToRead = limit ? Math.min(limit, fileSize - offset) : fileSize - offset;
+    log('debug', `Stream reading ${bytesToRead} bytes from offset ${offset} in file ${filePath}`);
+    // Для очень маленьких файлов или маленьких чанков используем прямое чтение
+    if (bytesToRead <= chunkSize) {
+        const fd = await fs.open(filePath, 'r');
+        const buffer = Buffer.alloc(bytesToRead);
+        await fd.read(buffer, 0, bytesToRead, offset);
+        await fd.close();
+        return buffer.toString(encoding);
+    }
+    // Для больших объемов используем чтение по чанкам
+    const chunks = [];
+    let bytesRead = 0;
+    const fd = await fs.open(filePath, 'r');
+    try {
+        while (bytesRead < bytesToRead) {
+            // Размер текущего чанка
+            const currentChunkSize = Math.min(chunkSize, bytesToRead - bytesRead);
+            const buffer = Buffer.alloc(currentChunkSize);
+            // Читаем чанк
+            const result = await fd.read(buffer, 0, currentChunkSize, offset + bytesRead);
+            // Проверяем результат чтения
+            if (result.bytesRead === 0) {
+                // Если ничего не прочитано, значит достигли конца файла
+                break;
+            }
+            // Если прочитали меньше чем ожидали, обрезаем буфер
+            if (result.bytesRead < currentChunkSize) {
+                chunks.push(buffer.slice(0, result.bytesRead));
+            }
+            else {
+                chunks.push(buffer);
+            }
+            bytesRead += result.bytesRead;
+        }
+    }
+    finally {
+        // Всегда закрываем файловый дескриптор
+        await fd.close();
+    }
+    // Объединяем все чанки и возвращаем строку
+    const completeBuffer = Buffer.concat(chunks);
+    return completeBuffer.toString(encoding);
+}
 server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     try {
         const { name, arguments: args } = request.params;
@@ -605,6 +703,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                 return {
                     content: [{ type: "text", text: content }],
                 };
+            }
+            case "stream_read_file": {
+                const parsed = StreamReadFileArgsSchema.safeParse(args);
+                if (!parsed.success) {
+                    throw new Error(`Invalid arguments for stream_read_file: ${parsed.error}`);
+                }
+                const validPath = await validatePath(parsed.data.path);
+                const { offset, limit, encoding, chunkSize } = parsed.data;
+                try {
+                    // Получаем информацию о файле для включения в ответ
+                    const stats = await fs.stat(validPath);
+                    const fileSize = stats.size;
+                    // Вычисляем фактические границы чтения
+                    const effectiveOffset = Math.min(offset, fileSize);
+                    const effectiveLimit = limit ? Math.min(limit, fileSize - effectiveOffset) : fileSize - effectiveOffset;
+                    log('info', `Streaming file ${validPath} - Offset: ${effectiveOffset}, Limit: ${effectiveLimit}, ` +
+                        `Total file size: ${fileSize}`);
+                    const content = await streamReadFile(validPath, {
+                        offset: effectiveOffset,
+                        limit: effectiveLimit,
+                        encoding,
+                        chunkSize
+                    });
+                    // Формируем информационное сообщение о чтении
+                    const infoMsg = `\n\n[ℹ️ Потоковое чтение: прочитано ${effectiveLimit} байт из ${fileSize} байт файла, ` +
+                        `начиная с позиции ${effectiveOffset}]`;
+                    return {
+                        content: [{ type: "text", text: content + infoMsg }],
+                    };
+                }
+                catch (error) {
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    log('error', `Ошибка при потоковом чтении файла ${validPath}: ${errorMessage}`);
+                    throw new Error(`Stream read file error: ${errorMessage}`);
+                }
             }
             case "read_multiple_files": {
                 const parsed = ReadMultipleFilesArgsSchema.safeParse(args);
@@ -637,6 +770,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                     throw new Error(`Invalid arguments for write_file: ${parsed.error}`);
                 }
                 const validPath = await validatePath(parsed.data.path);
+                // Если включена автоматическая оптимизация, используем оптимизированную запись
+                if (config.autoOptimizeWriteOperations) {
+                    return await performOptimizedWrite({
+                        path: validPath,
+                        content: parsed.data.content,
+                        requestedFunction: 'write_file',
+                        isFullRewrite: true
+                    });
+                }
+                // Стандартное поведение, если оптимизация отключена
                 await fs.writeFile(validPath, parsed.data.content, "utf-8");
                 return {
                     content: [{ type: "text", text: `Successfully wrote to ${parsed.data.path}` }],
@@ -648,7 +791,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                     throw new Error(`Invalid arguments for append_file: ${parsed.error}`);
                 }
                 const validPath = await validatePath(parsed.data.path);
-                // Использование опции флага 'a' для добавления в конец файла
+                // Если включена автоматическая оптимизация, используем оптимизированную запись
+                if (config.autoOptimizeWriteOperations) {
+                    return await performOptimizedWrite({
+                        path: validPath,
+                        content: parsed.data.content,
+                        requestedFunction: 'append_file',
+                        isFullRewrite: false
+                    });
+                }
+                // Стандартное поведение, если оптимизация отключена
                 try {
                     // Открываем файл для добавления данных
                     const fileHandle = await fs.open(validPath, 'a+');
@@ -850,3 +1002,105 @@ const transport = new StdioServerTransport();
 server.connect(transport);
 log('info', `Secure filesystem server started. Allowed directories: ${allowedDirectories.join(', ')}`);
 log('info', `Logging level: ${global.DEBUG_LEVEL}`);
+/**
+ * Определяет оптимальную функцию для записи файла
+ * на основе анализа параметров
+ * @param options Параметры для определения метода записи
+ * @returns Название оптимального метода
+ */
+function determineOptimalWriteFunction(options) {
+    // По умолчанию для существующих файлов используем append, для новых - write
+    let selectedFunction = options.fileExists ? 'append_file' : 'write_file';
+    // Для больших файлов используем smart_append для предотвращения дублирования
+    if (options.fileSize && options.fileSize > config.largeFileThreshold) {
+        selectedFunction = 'smart_append_file';
+    }
+    // Для длинного контента предпочитаем smart_append
+    if (options.content.length > config.smartWriteThreshold) {
+        selectedFunction = 'smart_append_file';
+        log('info', `Large content detected (${options.content.length} chars). Using smart_append_file for ${options.path}`);
+    }
+    // Если запрошена полная перезапись, используем write_file
+    if (options.isFullRewrite) {
+        selectedFunction = 'write_file';
+    }
+    // Если запрошена конкретная функция, используем её
+    if (options.requestedFunction &&
+        (['write_file', 'append_file', 'smart_append_file'].includes(options.requestedFunction))) {
+        return options.requestedFunction;
+    }
+    return selectedFunction;
+}
+/**
+ * Выполняет операцию записи файла с помощью оптимальной функции
+ * @param options Параметры операции записи
+ * @returns Результат операции в формате ответа API
+ */
+async function performOptimizedWrite(options) {
+    // Создаем параметры для улучшенной функции с поддержкой маркеров завершения
+    const enhancedOptions = {
+        ...options,
+        contentCompletionConfig: {
+            CONTENT_COMPLETION_MARKER: config.contentCompletionMarker.marker,
+            LARGE_CONTENT_THRESHOLD: config.contentCompletionMarker.sizeThreshold,
+            BINARY_CONTENT_EXTENSIONS: config.binaryContentExtensions,
+            DEBUG: global.DEBUG_LEVEL === 'debug'
+        }
+    };
+    // Вызываем улучшенную функцию для обработки маркеров завершения
+    if (config.contentCompletionMarker.enabled) {
+        return await enhancedPerformOptimizedWrite(enhancedOptions);
+    }
+    // Если функциональность маркеров завершения отключена, используем стандартную логику
+    // Проверяем существование файла и получаем его размер, если файл существует
+    let fileExists = options.fileExists;
+    let fileSize = options.fileSize || 0;
+    if (fileExists === undefined) {
+        try {
+            const stats = await fs.stat(options.path);
+            fileExists = true;
+            fileSize = stats.size;
+        }
+        catch {
+            fileExists = false;
+            fileSize = 0;
+        }
+    }
+    // Обновляем параметры
+    options.fileExists = fileExists;
+    options.fileSize = fileSize;
+    // Определяем оптимальную функцию для записи
+    const optimalFunction = determineOptimalWriteFunction(options);
+    // Выполняем запись с помощью выбранной функции
+    try {
+        switch (optimalFunction) {
+            case 'write_file':
+                await fs.writeFile(options.path, options.content, "utf-8");
+                break;
+            case 'append_file':
+                const fileHandle = await fs.open(options.path, 'a+');
+                await fileHandle.writeFile(options.content, "utf-8");
+                await fileHandle.close();
+                break;
+            case 'smart_append_file':
+                await smartAppend(options.path, options.content);
+                break;
+        }
+        // Формируем информативное сообщение
+        let message = `Successfully wrote to ${options.path}`;
+        // Если функция отличается от запрошенной, добавляем информацию о выборе
+        if (options.requestedFunction && options.requestedFunction !== optimalFunction) {
+            message += ` (automatically used ${optimalFunction} for optimal performance)`;
+        }
+        return {
+            content: [{ type: "text", text: message }],
+            optimizedWrite: true,
+            usedFunction: optimalFunction
+        };
+    }
+    catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        log('error', `Error during optimized write to ${options.path}: ${errorMessage}`);
+        throw new Error(`Failed to write file: ${errorMessage}`);
+    }
+}
