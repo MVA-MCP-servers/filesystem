@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 
+// Константы для работы с размером файлов
+const MAX_INLINE_SIZE = 1024 * 1024; // 1 МБ - максимальный размер для прямого чтения
+const DEFAULT_CHUNK_SIZE = 512 * 1024; // 512 КБ - размер чанка для потокового чтения
+
+
 // Интерфейс для параметров чтения файлов
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -442,7 +447,7 @@ interface WriteOperationOptions {
   /** Размер файла (если известен) */
   fileSize?: number;
   /** Функция записи, запрошенная пользователем */
-  requestedFunction?: string;
+  requestedFunction?: 'write_file' | 'append_file' | 'smart_append_file';
   /** Флаг полной перезаписи */
   isFullRewrite?: boolean;
 }
@@ -763,10 +768,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   };
 });
 
-
-// Константы для работы с размером файлов
-const MAX_INLINE_SIZE = 1024 * 1024; // 1 МБ - максимальный размер для прямого чтения
-const DEFAULT_CHUNK_SIZE = 512 * 1024; // 512 КБ - размер чанка для потокового чтения
 
 interface ReadOptions {
   offset?: number;     // Начальная позиция чтения (в байтах)
